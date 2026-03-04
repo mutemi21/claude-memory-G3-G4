@@ -1,0 +1,20 @@
+# Ignore everything by default
+*
+
+# Track markdown files (memory and instructions)
+!*.md
+!**/*.md
+
+# Track settings
+!settings.json
+
+# Track this gitignore
+!.gitignore
+
+# Keep directory structure for projects
+!projects/
+!projects/*/
+!projects/*/memory/
+
+# Never track credentials or sensitive files
+.credentials.json
