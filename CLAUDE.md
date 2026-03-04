@@ -23,6 +23,9 @@ When saving, use this format and append to the existing file:
 
 When the user confirms a fix works, update its Status to "Verified". If it failed, update to "Failed" and note what went wrong.
 
+After saving to memory, ask: "Would you like me to commit and push the memory update to GitHub?"
+If yes, run: `cd ~/.claude && git add -A && git commit -m "<short description of what was saved>" && git push`
+
 # Global Coding Guidelines
 
 ## C/C++ Firmware
