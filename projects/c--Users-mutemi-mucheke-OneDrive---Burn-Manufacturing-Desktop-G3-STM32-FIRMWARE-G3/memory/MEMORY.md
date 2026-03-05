@@ -32,3 +32,5 @@ Tick (~100ms): IndCooker_Tick, UIPresenter_Tick, Led_Tick, SessionSummary_Tick
 
 ## Details
 See `ui_architecture.md` for full details.
+See `features.md` for implemented features.
+See `bugfixes.md` for bug fixes.
