@@ -52,3 +52,40 @@
 
 - **Verification:** Set timer from cooking, verify 5x flash, verify timer+power display, verify child lock preserves timer, verify 0:00 handling, verify fan runs after timed session
 - **Status:** Verified
+
+## Error Handling Rewrite — Pause/Resume Cooking on Error
+- **Product:** G3
+- **Date:** 2026-03-06
+- **Branch:** BugFix/Timer
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c`, `ProductFeatures/UI/Src/UIModel.c`, `ProductFeatures/UI/Inc/UIModel.h`, `ExternalPeripherals/InductionCooker/Src/IndCooker.c`, `ExternalPeripherals/InductionCooker/Inc/IndCooker.h`, `ProductFeatures/UI/Src/UIView.c`
+- **Purpose:** Rewrite error handling so cooking pauses on error and resumes when error clears
+
+### Error Handling Logic
+1. **Error occurs** → save pre-error state, power level, and timer status → pause timer if running → show error on display → set `ErrorActive` flag
+2. **Error persists** → error display persists, auto-off counter paused
+3. **Error clears** → restore power level, resume timer if it was running, return to saved state
+4. **ON button during error** → go directly to STANDBY (no shutdown sequence), stop timer, reset everything
+5. **Only ON/OFF button works during error state** — all other buttons ignored
+
+### New Functions Added
+- `IndCooker_PauseTimer()` — stops timer countdown without resetting the value
+- `IndCooker_ResumeTimer()` — resumes timer if remaining time > 0
+- `UIModel_RestorePowerLevel(CookerPower_e)` — restores power setting and sends to power board
+
+### New Static Variables in UIPresenter.c
+- `ErrorActive` — tracks whether an error is currently active
+- `SavedPreErrorState` — UI state before error occurred
+- `SavedPreErrorPowerLevel` — power level before error occurred
+- `TimerWasRunningBeforeError` — whether timer was counting down
+
+### States That Resume Cooking After Error
+- USER_COOKING, USER_COOKING_WITH_TIMER, TIME_SETTING_SCREEN, CHILD_LOCK, CHILD_LOCK_SHOW_POWER
+- All other states → go to STANDBY on error clear
+
+### Error Display Position
+- Error codes (E0-E11, EC) displayed on digits 5-6 of the 7-segment display (right side)
+- Single-digit errors: 4 leading spaces ("    E1")
+- Two-digit errors: 3 leading spaces ("   E10")
+
+- **Verification:** Trigger errors during cooking — should pause and resume. Press ON during error — should go to standby. Check error codes appear on digits 5-6.
+- **Status:** Untested
