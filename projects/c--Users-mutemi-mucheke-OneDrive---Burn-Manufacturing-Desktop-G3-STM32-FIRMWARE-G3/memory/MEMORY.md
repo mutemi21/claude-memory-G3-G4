@@ -13,8 +13,8 @@ Branch: EHD-1537-G3-Custom-Display-Mapping
 ## Key Files
 - UI states/transitions: `ProductFeatures/UI/Docs/UITransition.md`
 - Character maps: `ExternalPeripherals/Display/Inc/NewShineCharMap.h`, `BaoLaiYaCharMap.h`
-- Power levels enum: search for `CookerPower_e` in `GlobalDefs/`
-- Error codes enum: search for `CookerError_e` in `GlobalDefs/`
+- Power levels enum: `CookerPower_e` in `ExternalPeripherals/PowerBoard/Inc/PowerBoard.h`
+- Error codes enum: `CookerError_e` in `ExternalPeripherals/PowerBoard/Inc/PowerBoard.h`
 - Keypad buttons: `ExternalPeripherals/Keypad/Inc/Keypad.h`
 
 ## UI States (19 total)
@@ -31,6 +31,7 @@ IndCooker_Process → UIPresenter_Process → UIView_Process → Keypad_Process 
 Tick (~100ms): IndCooker_Tick, UIPresenter_Tick, Led_Tick, SessionSummary_Tick
 
 ## Details
-See `ui_architecture.md` for full details.
+See `codebase_summary.md` for complete file-by-file breakdown of every module.
+See `ui_architecture.md` for full UI details.
 See `features.md` for implemented features.
 See `bugfixes.md` for bug fixes.
