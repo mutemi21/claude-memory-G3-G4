@@ -1,5 +1,8 @@
 # G3 STM32 Firmware - Project Memory
 
+## IMPORTANT: Before Starting Any Task
+**Always read `codebase_summary.md` in this memory directory before solving any task.** It contains a complete file-by-file breakdown of the entire codebase, data flow diagrams, and a "Where to Start" table for common tasks. If the information needed is not there or appears outdated, scan the relevant parts of the codebase first, then update `codebase_summary.md` with the new information before proceeding.
+
 ## Project Overview
 STM32G0 induction cooker firmware with credit/token-based usage system.
 Branch: EHD-1537-G3-Custom-Display-Mapping
