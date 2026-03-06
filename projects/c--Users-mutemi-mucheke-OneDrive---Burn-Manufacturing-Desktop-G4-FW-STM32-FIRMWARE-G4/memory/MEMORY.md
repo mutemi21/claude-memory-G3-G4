@@ -1,4 +1,8 @@
-# STM32 Firmware G4 - Key Learnings
+# G4 Induction Cooker - STM32 Firmware (STM32G071CB, Cortex-M0+)
+
+## Full Codebase Summary
+- See [codebase_map.md](codebase_map.md) for complete file-by-file breakdown
+- See also [CODEBASE_SUMMARY.md](../../OneDrive%20-%20Burn%20Manufacturing/Desktop/G4%20FW/STM32_FIRMWARE_G4/CODEBASE_SUMMARY.md) in the repo root
 
 ## Architecture
 - **MVP pattern**: UIPresenter (state machine) -> UIModel (data) -> UIView (display)
