@@ -1,8 +1,13 @@
 # G4 Induction Cooker - STM32 Firmware (STM32G071CB, Cortex-M0+)
 
+## Before Starting Any Task
+1. **Read `CODEBASE_SUMMARY.md`** in the project root first for full file-by-file context, architecture diagrams, and callback chains.
+2. If the info you need is **not there**, scan the relevant source files, then **update `CODEBASE_SUMMARY.md`** with the new information.
+3. After adding/modifying files, update their entries in `CODEBASE_SUMMARY.md`.
+
 ## Full Codebase Summary
-- See [codebase_map.md](codebase_map.md) for complete file-by-file breakdown
-- See also [CODEBASE_SUMMARY.md](../../OneDrive%20-%20Burn%20Manufacturing/Desktop/G4%20FW/STM32_FIRMWARE_G4/CODEBASE_SUMMARY.md) in the repo root
+- See [codebase_map.md](codebase_map.md) for memory copy of codebase breakdown
+- See `CODEBASE_SUMMARY.md` in the repo root for the canonical version
 
 ## Architecture
 - **MVP pattern**: UIPresenter (state machine) -> UIModel (data) -> UIView (display)
