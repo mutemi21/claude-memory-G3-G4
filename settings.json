@@ -1,1 +1,53 @@
-{}
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(winget install:*)",
+      "Bash(export PATH=\"/c/Program Files/GitHub CLI:$PATH\")",
+      "Bash(gh auth:*)",
+      "Bash(python3 -c \"import sys,base64; print\\(base64.b64decode\\(sys.stdin.read\\(\\)\\).decode\\(\\)\\)\")",
+      "Bash(python -c \"import sys,base64; print\\(base64.b64decode\\(sys.stdin.read\\(\\)\\).decode\\(\\)\\)\")",
+      "Read(//c/Users/mutemi.mucheke/AppData/Local/Temp/**)",
+      "Bash(powershell -Command \"[Convert]::ToBase64String\\([System.IO.File]::ReadAllBytes\\(''TimedCookingLogic.md''\\)\\)\")",
+      "Bash(\"$LOCALAPPDATA/Temp/timed_b64.txt\")",
+      "Read(//c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 FW/STM32_FIRMWARE_G4/$LOCALAPPDATA/Temp/**)",
+      "Bash(grep -rn \"ForceActivateDeactivate\\\\|device_on\\\\|device_off\" '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 FW/STM32_FIRMWARE_G4/ProductFeatures' --include=*.c --include=*.h)",
+      "Bash(find '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 FW/STM32_FIRMWARE_G4' -name CODEBASE* -o -name README*)",
+      "Bash(grep -rn \"nxp_common_payg_state\\\\|NXP_COMMON_PAYG_STATE\" '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 FW/STM32_FIRMWARE_G4/Drivers/Nexus' --include=*.h)",
+      "Bash(where python3:*)",
+      "Bash(where python:*)",
+      "Bash(where py:*)",
+      "Bash(py -3 -c \"print\\(''hello''\\)\")",
+      "Bash(py -3 -c \"from nexus_keycode.protocols.small import SetCreditSmallMessage; print\\(''nexus_keycode available''\\)\")",
+      "Bash(find . -name \"*.c\" -type f -exec wc -l {} +)",
+      "Read(//c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 FW/STM32_FIRMWARE_G4/**)",
+      "Read(//c/Users/MUTEMI~1.MUC/AppData/Local/Temp/claude/c--Users-mutemi-mucheke-OneDrive---Burn-Manufacturing-Desktop-G3-STM32-FIRMWARE-G3/9f8f07dc-711a-4cc0-b8d3-14ff1f8d9ae4/tasks/**)",
+      "Bash(git clone:*)",
+      "Read(//c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/**)",
+      "Bash(arm-none-eabi-gcc --version)",
+      "Bash(cmake --preset Debug)",
+      "Bash(cmake --build --preset Debug)",
+      "Bash(cmake --build build/Debug)",
+      "Bash(grep -iE \"\\\\.\\(c|h\\)$\")",
+      "Bash(find 'C:\\\\Users\\\\mutemi.mucheke\\\\OneDrive - Burn Manufacturing\\\\Desktop\\\\unified-firmware' -name *uart* -o -name *UART*)",
+      "Bash(find 'C:\\\\Users\\\\mutemi.mucheke\\\\OneDrive - Burn Manufacturing\\\\Desktop\\\\G4 FW\\\\STM32_FIRMWARE_G4' -name *uart* -o -name *UART*)"
+    ],
+    "additionalDirectories": [
+      "\\tmp",
+      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\Core\\Src",
+      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\PowerBoard\\Src",
+      "c:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\RFComms\\BTModemDriver\\Src",
+      "c:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ProductFeatures\\UI\\Inc",
+      "c:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ProductFeatures\\UI\\Src",
+      "c:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\Display\\Src",
+      "c:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\Display\\Inc",
+      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\Keypad\\Src",
+      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\G4 FW\\STM32_FIRMWARE_G4\\ExternalPeripherals\\Keypad\\Src",
+      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\InductionCooker\\Src"
+    ]
+  },
+  "effortLevel": "high",
+  "autoUpdatesChannel": "latest"
+}
