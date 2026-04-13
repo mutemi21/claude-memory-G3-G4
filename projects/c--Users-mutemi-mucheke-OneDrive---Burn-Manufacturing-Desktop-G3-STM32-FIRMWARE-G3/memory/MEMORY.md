@@ -38,3 +38,4 @@ See `codebase_summary.md` for complete file-by-file breakdown of every module.
 See `ui_architecture.md` for full UI details.
 See `features.md` for implemented features.
 See `bugfixes.md` for bug fixes.
+- [CHK Driver Protocol](chk_driver_protocol.md) — UART protocol, wake-up sequence, commanded vs reported state

@@ -1,5 +1,28 @@
 # Bug Fixes
 
+## BT, LOCK, LED_0, LED_1 light up on power-up before Led_Init runs
+- **Product:** G3
+- **Date:** 2026-04-13
+- **Branch:** Prescan
+- **Files changed:** `Core/Src/gpio.c`, `STM32_FIRMWARE_G3.ioc`, `ExternalPeripherals/Led/Src/Led.c`, `ExternalPeripherals/Led/Inc/Led.h`
+- **Root cause / Purpose:** When the cooker was plugged in, the Bluetooth LED, Lock LED, and two board LEDs (LED_0 on PC6, LED_1 on PC7) came on at power-up and only turned off ~18 init steps later when `Led_Init()` ran. Expectation was all LEDs off except the PWR LED toggling in standby. Root cause was that `MX_GPIO_Init()` (CubeMX-generated) wrote these pins to the wrong initial level given each LED's polarity:
+  - BT_LED (PB12, active-HIGH): written SET → ON
+  - LOCK_LED (PA8, active-HIGH): written SET → ON
+  - LED_0 (PC6, active-LOW): written RESET → ON
+  - LED_1 (PC7, active-LOW): written RESET → ON
+  - Both BT and LOCK also had `GPIO_PuPd=GPIO_PULLUP` on push-pull outputs, weakly holding them high during the init window.
+- **What we tried that didn't work:** N/A — identified by tracing WritePin calls in `MX_GPIO_Init` against the polarity in `Led.c` `Led_On/Led_Off` functions.
+- **Final solution:** In `Core/Src/gpio.c` `MX_GPIO_Init()`:
+  - Line 61: `HAL_GPIO_WritePin(LED_CRTL_BLE_GPIO_Port, LED_CRTL_BLE_Pin, GPIO_PIN_SET)` → `GPIO_PIN_RESET`
+  - Line 64: `HAL_GPIO_WritePin(LED_CTRL_LOCK_GPIO_Port, LED_CTRL_LOCK_Pin, GPIO_PIN_SET)` → `GPIO_PIN_RESET`
+  - Line 67: `HAL_GPIO_WritePin(GPIOC, LED_0_Pin|LED_1_Pin, GPIO_PIN_RESET)` → `GPIO_PIN_SET` (both are active-LOW)
+  - Line 89: BLE pin `GPIO_PuPd=GPIO_PULLUP` → `GPIO_NOPULL`
+  - Line 102: LOCK pin `GPIO_PuPd=GPIO_PULLUP` → `GPIO_NOPULL`
+  Mirrored the same changes in `STM32_FIRMWARE_G3.ioc` (PA8, PB12, PC6, PC7) so CubeMX regeneration produces the fixed code — set `PinState` and `GPIO_PuPd` on each pin to match.
+  Also added `LED_0` to the `Led_e` enum in `Led.h` and added matching cases to `Led_On`/`Led_Off`/`Led_Toggle` and `Led_Init`/`Led_AllOn` in `Led.c` so the pin is controllable from firmware (was defined in GPIO but never referenced).
+- **Verification:** Power-cycle the cooker. At startup only the PWR LED should toggle in standby — BT, LOCK, LED_0, and LED_1 should stay off. User confirmed on hardware.
+- **Status:** Verified (LED startup behavior). The `LED_0` enum/switch additions are untested — exercise by calling `Led_On(LED_0)` / `Led_Off(LED_0)` and checking the physical PC6 LED responds.
+
 ## "USED" displays as "USE" on NewShine 7-segment display
 - **Product:** G3
 - **Date:** 2026-03-05
@@ -59,3 +82,15 @@
 - **Verification:** Flash unified firmware to G4 hardware. PB15 starts LOW at init, recovers to HIGH after ~3 seconds. EXTI interrupts fire on button press. All CMD and NUM keys detected correctly.
 - **Key lesson:** Cap touch controllers (X12A) are extremely sensitive to EMI during power-up calibration. When unifying repos, always match GPIO initial output levels for reset/power pins to the working reference, especially for peripherals near the cap touch sensor. The CubeMX .ioc file may generate different initial states than the reference.
 - **Status:** Verified
+
+## CHKDriver UpdateCurrentStatus overwrites CurrentPowerState to POWER_OFF
+- **Product:** G3
+- **Date:** 2026-03-30
+- **Branch:** CHK-Bring-Up
+- **Files changed:** `ExternalPeripherals/PowerBoard/Src/CHKDriver.c`
+- **Root cause / Purpose:** `UpdateCurrentStatus()` declared `NewPowerState = COOKER_POWER_STATE_POWER_OFF` as a local variable but never parsed it from the RX data. On every received status frame, it compared `NewPowerState != CurrentPowerState` and overwrote `CurrentPowerState` back to `POWER_OFF`. This meant `CHKDriver_PowerOn()` would set `CurrentPowerState = POWER_ON`, but the very next RX frame would reset it to `POWER_OFF`, causing `SendCurrentPowerCommandToCooker()` to send power-off bytes (Command[7]=0x00, Command[10]=0x3C) instead of power-on bytes (Command[7]=0x10, Command[10]=0xE0).
+- **What we tried that didn't work:** Initially thought the wake-up sequence was failing. Tested with a 30s send / 30s silent / wake cycle. The wake-up GPIO pulse worked correctly, but after waking the board only entered standby instead of resuming 200W.
+- **Final solution:** Removed `NewPowerState` variable entirely from `UpdateCurrentStatus()`. `CurrentPowerState` is a commanded state (set by `PowerOn`/`PowerOff`), not reported by the power board. The status callback now only fires on pot presence changes. Added a comment explaining why `CurrentPowerState` must not be overwritten by RX data.
+- **Verification:** Wake-up test cycle: 30s sending at 200W → 30s silent → wake → should resume 200W (not standby).
+- **Status:** Untested
+- **Key lesson for refactoring:** In the CHK driver, clearly separate *commanded state* (what we tell the power board to do) from *reported state* (what the power board tells us). `CurrentPowerState` and `CurrentPowerLevel` are commanded. Pot presence, errors, and temperatures are reported. Never let RX parsing overwrite commanded state.

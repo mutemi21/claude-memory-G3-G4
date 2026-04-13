@@ -32,7 +32,16 @@
       "Bash(cmake --build build/Debug)",
       "Bash(grep -iE \"\\\\.\\(c|h\\)$\")",
       "Bash(find 'C:\\\\Users\\\\mutemi.mucheke\\\\OneDrive - Burn Manufacturing\\\\Desktop\\\\unified-firmware' -name *uart* -o -name *UART*)",
-      "Bash(find 'C:\\\\Users\\\\mutemi.mucheke\\\\OneDrive - Burn Manufacturing\\\\Desktop\\\\G4 FW\\\\STM32_FIRMWARE_G4' -name *uart* -o -name *UART*)"
+      "Bash(find 'C:\\\\Users\\\\mutemi.mucheke\\\\OneDrive - Burn Manufacturing\\\\Desktop\\\\G4 FW\\\\STM32_FIRMWARE_G4' -name *uart* -o -name *UART*)",
+      "Read(//c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop//**)",
+      "Bash(grep -rn \"DumpRegisters\\\\|diag\\\\|DIAG\" '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware' --include=*.c --include=*.h)",
+      "Bash(grep -rn \"ExtiFallingCount\\\\|ExtiRisingCount\" '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware' --include=*.c --include=*.h)",
+      "Bash(grep -rn \"^[[:space:]]*//.*MX_\\\\|^[[:space:]]*\\\\/\\\\*.*MX_\" '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/Core/Src/main.c')",
+      "Bash(grep -rn \"//.*Debug\\\\|//.*debug\" '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/Core/Src/main.c' '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/ExternalPeripherals/Keypad')",
+      "Bash(grep -n _DEBUG_ENABLEDs*1 '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/ExternalPeripherals/Display/Src/Display.c' '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/ExternalPeripherals/RFComms/BTModemDriver/Src/ModemHw.c')",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(python c:/tmp/generate_test_plan.py)"
     ],
     "additionalDirectories": [
       "\\tmp",
@@ -48,6 +57,6 @@
       "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\InductionCooker\\Src"
     ]
   },
-  "effortLevel": "high",
+  "effortLevel": "max",
   "autoUpdatesChannel": "latest"
 }
