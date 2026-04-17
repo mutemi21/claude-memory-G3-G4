@@ -94,3 +94,19 @@
 - **Verification:** Wake-up test cycle: 30s sending at 200W → 30s silent → wake → should resume 200W (not standby).
 - **Status:** Untested
 - **Key lesson for refactoring:** In the CHK driver, clearly separate *commanded state* (what we tell the power board to do) from *reported state* (what the power board tells us). `CurrentPowerState` and `CurrentPowerLevel` are commanded. Pot presence, errors, and temperatures are reported. Never let RX parsing overwrite commanded state.
+
+## Lock LED stays on after exiting child lock in timed cooking
+- **Product:** G3
+- **Date:** 2026-04-17
+- **Branch:** Prescan
+- **Files changed:** `ProductFeatures/UI/Src/UIView.c`
+- **Root cause / Purpose:** In a timed cooking session, long-pressing the lock button enters child lock (LOCK_LED on) and pressing again exits (state goes back to `USER_COOKING_WITH_TIMER`) — but the LOCK_LED stayed on. Normal (non-timed) cooking worked fine. The LED was managed only in `EnterChildLock`/`ExitChildLock` in `UIPresenter.c`, gated by `LockToggleCooldown` (set to 2 ticks ≈ 2s on entry). Because `UIPresenter_Tick` runs every 1s and the keypad generates repeated LONG_PRESS events while the button is held, a second LONG_PRESS could arrive while cooldown was still > 0. `ExitChildLock` then returned early without calling `Led_Off(LOCK_LED)`. The asymmetry with normal cooking came from the LED being controlled purely by the presenter state transition — there was no view-level safety net.
+- **What we tried that didn't work:** Traced the full state-machine flow first (UIPresenter_Process → ProcessCommandKeyPress → ExitChildLock → Led_Off). On paper the LED should turn off. The race only manifests because `LockToggleCooldown` can still be non-zero when a held-button fires a second LONG_PRESS.
+- **Final solution:** Made LOCK_LED a function of the active view in `ProductFeatures/UI/Src/UIView.c`, symmetric with how PWR_LED is handled:
+  - `ShowCurrentPowerSetting` (line ~163): added `Led_Off(LOCK_LED)`
+  - `ShowTimedCookingWithPower` (line ~317): added `Led_On(PWR_LED)` + `Led_Off(LOCK_LED)` at function top. This view re-renders every 100 ms tick, so the LED cannot linger even if `ExitChildLock`'s `Led_Off` is skipped by cooldown.
+  - `ShowChildLock` (line ~460): added `Led_On(LOCK_LED)`
+  - `ShowPowerLevelWithLockIcon` (line ~474): added `Led_On(LOCK_LED)`
+  `EnterChildLock`/`ExitChildLock` still drive the LED too — the view calls are a defensive second path.
+- **Verification:** Start a timed cooking session. Long-press lock → LOCK_LED on + lock screen. Long-press again → LOCK_LED off + back to timed cooking screen with timer and power level. Repeat several times quickly to exercise the cooldown race. Also verify normal cooking still works (lock on/off).
+- **Status:** Untested
