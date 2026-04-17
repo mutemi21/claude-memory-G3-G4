@@ -120,3 +120,32 @@
 3. Long-press lock during non-timed cooking → LOC/power cycling (same 3s/9s), no timer section (unchanged from before).
 4. Exit lock at any point → returns to SavedPreLockState, LOCK_LED off.
 - **Status:** Verified
+
+## Startup all-segments/all-LEDs-on state (doubles as residual-display mitigation)
+- **Product:** G3
+- **Date:** 2026-04-17
+- **Branch:** Prescan (commit 53c86f6), also on CHK-Bring-Up (commit 1712796)
+- **Files changed:** `Core/Src/main.c`, `ExternalPeripherals/Display/Inc/Display.h`, `ExternalPeripherals/Display/Src/Display.c`, `ExternalPeripherals/Led/Inc/Led.h`, `ExternalPeripherals/Led/Src/Led.c`, `ProductFeatures/UI/Inc/UIView.h`, `ProductFeatures/UI/Src/UIPresenter.c`, `ProductFeatures/UI/Src/UIView.c`
+- **Purpose:** On mains plug-in the cooker now holds every segment and every LED on for 2 seconds before proceeding to STANDBY. All UI buttons are inactive during this window. Doubles as the fix for the residual-display bug: on re-plug the VK16K33 had been powered through the dip by bulk caps and retained its RAM ("USEd", power level, etc.) — that retained image used to flash briefly before the startup state kicked in.
+
+### Key insight (after iteration)
+The residual flash has a hard software floor of a few ms (HAL_Init + SystemClock_Config + I²C setup is unavoidable). Instead of trying to hide it, **match** it: the first I²C write after `MX_I2C1_Init` now paints the VK16K33 RAM with all-0xFF. Whatever the display was retaining gets instantly replaced with the same all-segments-on image that the startup state is about to render — so the transition is invisible. For cold boot (POR default = display OFF), the paint goes into a dark chip and becomes visible only once `Display_Init` enables output, so no transient there either.
+
+### Mechanism
+- New `UI_VIEW_STARTUP_ALL_ON` view + `ShowStartupAllOn` which calls `Led_AllOn()` and writes all 0xFF to the display.
+- `UI_PRESENTER_STATE_START_UP` now uses this view, `TimeOutValue = 2`, and on timeout runs the new `EndStartupSequence` action which calls `Led_AllOff()` then `CheckCookerLoanStatus` (which transitions to STANDBY).
+- All key bindings on START_UP are `NO_ACTION_ON_KEYPRESS` — buttons are inert.
+- `UIPresenter_Init` now starts in `UI_PRESENTER_STATE_START_UP` (was STANDBY). `UIView.c` static `CurrentUIView` defaults to `UI_VIEW_STARTUP_ALL_ON` so the very first `UIView_RunScreen` inside `UIView_Init` already paints all-on.
+- `Led_AllOff()` added as mirror of `Led_AllOn()`.
+- `Display_PaintAllSegmentsOn()` (replaces the earlier `Display_OutputsOff`) writes the 17-byte all-0xFF buffer via I²C. Called from `main.c` right after `MX_I2C1_Init()` — this is what masks the retained image.
+- The existing 300 ms startup beep (in the `UI_VIEW_BLANK_SCREEN` case of `UIView_Process`) is preserved via a shared `case UI_VIEW_STARTUP_ALL_ON:` fall-through.
+
+### Verification
+- Unplug during "USEd" screen, wait several seconds, plug back in → no visible "USEd" flash. Display goes straight to all-on for 2 s, then normal STANDBY with blinking PWR LED.
+- Cold boot (fully drained) → display starts all-on, no random segments.
+- Buttons pressed during the 2 s window do nothing.
+- Startup beep still plays once on boot.
+- **Status:** Verified
+
+### Known residual (not addressed)
+- "Segments flicker on mains unplug" — remains. That's a different root cause (VK16K33 driver instability as Vcc sags during mains-off). Fixes: bulk cap on display rail, or PVD-driven pre-brown-out display shutdown in firmware. Left for hardware revision.
