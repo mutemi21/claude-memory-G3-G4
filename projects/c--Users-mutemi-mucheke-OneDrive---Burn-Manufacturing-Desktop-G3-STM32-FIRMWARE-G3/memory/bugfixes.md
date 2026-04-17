@@ -123,3 +123,13 @@
   - `UIView_Process` (line ~791): added cases for `UI_VIEW_DISPLAY_CHILD_LOCK` and `UI_VIEW_DISPLAY_POWER_WITH_LOCK`. Both increment `ColonBlinkCounter` and toggle `ColonVisible` at `COLON_BLINK_TICKS`. CHILD_LOCK just ticks the counter (LOC screen has no colon to render). POWER_WITH_LOCK also calls `ShowPowerLevelWithLockIcon()` so the display actually redraws each tick. Not resetting the counter on entry/exit keeps the blink phase continuous across the lock/unlock transitions (user explicitly wanted "resume where it was").
 - **Verification:** Start a timed cooking session — confirm colon blinks at 1 Hz. Long-press lock. During the time+power+lock view the colon should continue to blink at 1 Hz. Long-press again to unlock — colon phase should be continuous (no visible jump).
 - **Status:** Verified
+
+## Lock LED stays on after timer expires while locked
+- **Product:** G3
+- **Date:** 2026-04-17
+- **Branch:** Prescan (commit bc3a8d3), also on CHK-Bring-Up (commit 8ee0e7a) — bundled with the "Lock during timer setting/acceptance" feature
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c`
+- **Root cause / Purpose:** `HandleTimerExpiry` transitioned to `SHUTDOWN_USED_LABEL` without turning off `LOCK_LED` when the cooking timer elapsed while the cooker was in `CHILD_LOCK`/`CHILD_LOCK_SHOW_POWER`. Exit from the lock normally goes through `ExitChildLock` which turns the LED off — but timer expiry bypasses that path.
+- **Final solution:** In `HandleTimerExpiry`, before setting state to `SHUTDOWN_USED_LABEL`, check if current state is `CHILD_LOCK` or `CHILD_LOCK_SHOW_POWER` and call `Led_Off(LOCK_LED)`.
+- **Verification:** Start a short timed cooking session, long-press lock, wait for the timer to expire. LOCK_LED should turn off as the cooker enters the shutdown "USED" sequence.
+- **Status:** Verified
