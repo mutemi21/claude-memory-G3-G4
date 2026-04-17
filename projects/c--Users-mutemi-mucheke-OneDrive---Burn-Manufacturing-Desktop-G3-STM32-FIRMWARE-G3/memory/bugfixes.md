@@ -133,3 +133,13 @@
 - **Final solution:** In `HandleTimerExpiry`, before setting state to `SHUTDOWN_USED_LABEL`, check if current state is `CHILD_LOCK` or `CHILD_LOCK_SHOW_POWER` and call `Led_Off(LOCK_LED)`.
 - **Verification:** Start a short timed cooking session, long-press lock, wait for the timer to expire. LOCK_LED should turn off as the cooker enters the shutdown "USED" sequence.
 - **Status:** Verified
+
+## ON/OFF button inert on SHOW_ON_MESSAGE screen
+- **Product:** G3
+- **Date:** 2026-04-17
+- **Branch:** Prescan (commit 03ce001), also on CHK-Bring-Up (commit d684d41)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c`
+- **Root cause / Purpose:** `UI_PRESENTER_STATE_SHOW_ON_MESSAGE` had `.ActionsOnKeyPress[ON_OFF_BUTTON] = NO_ACTION_ON_KEYPRESS`. During the ~5 s "ON" splash after pressing ON from STANDBY, pressing ON/OFF again did nothing — user couldn't cancel.
+- **Final solution:** Bound ON/OFF short press to `UI_PRESENTER_STATE_SHOW_OFF_MESSAGE` with action `UIModel_PowerOffPowerBoard`, mirroring the existing `SHOW_ZERO_POWER` pattern.
+- **Verification:** Press ON from STANDBY → "ON" shows. Press ON/OFF within the window → cooker powers off, "OFF" shows, returns to STANDBY.
+- **Status:** Verified

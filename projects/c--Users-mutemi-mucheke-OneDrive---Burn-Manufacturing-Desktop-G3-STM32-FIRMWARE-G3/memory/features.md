@@ -149,3 +149,6 @@ The residual flash has a hard software floor of a few ms (HAL_Init + SystemClock
 
 ### Known residual (not addressed)
 - "Segments flicker on mains unplug" — remains. That's a different root cause (VK16K33 driver instability as Vcc sags during mains-off). Fixes: bulk cap on display rail, or PVD-driven pre-brown-out display shutdown in firmware. Left for hardware revision.
+
+### Later polish (commit 03ce001 / d684d41)
+- `ShowStartupAllOn` now explicitly turns `INFO_PAY_LED` and `BT_LED` off after `Led_AllOn`. Those are excluded from the startup visual by design.
