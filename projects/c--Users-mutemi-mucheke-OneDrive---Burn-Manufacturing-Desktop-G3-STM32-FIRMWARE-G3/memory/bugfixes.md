@@ -110,3 +110,16 @@
   `EnterChildLock`/`ExitChildLock` still drive the LED too — the view calls are a defensive second path.
 - **Verification:** Start a timed cooking session. Long-press lock → LOCK_LED on + lock screen. Long-press again → LOCK_LED off + back to timed cooking screen with timer and power level. Repeat several times quickly to exercise the cooldown race. Also verify normal cooking still works (lock on/off).
 - **Status:** Verified
+
+## Colon doesn't blink in child lock during timed cooking
+- **Product:** G3
+- **Date:** 2026-04-17
+- **Branch:** Prescan (commit 0a4fdcd), also ported to CHK-Bring-Up (commit 292c821)
+- **Files changed:** `ProductFeatures/UI/Src/UIView.c`
+- **Root cause / Purpose:** In a timed cooking session, after long-pressing lock the display cycles LOC (2s) → time+power+lock icon (9s) → LOC → …. In the timed cooking view (`UI_VIEW_TIMED_COOKING_WITH_POWER`) the colon blinks at 1 Hz, but in the lock view the colon sat solid. Two causes: (1) `ShowPowerLevelWithLockIcon` always called `Display_GetColonData` unconditionally, not gated on `ColonVisible`. (2) `UIView_Process` only ticked `ColonBlinkCounter` / toggled `ColonVisible` for `UI_VIEW_TIMED_COOKING_WITH_POWER` — during lock views the counter was frozen and the screen wasn't re-rendered on tick.
+- **What we tried that didn't work:** N/A.
+- **Final solution:** Two edits in `ProductFeatures/UI/Src/UIView.c`:
+  - `ShowPowerLevelWithLockIcon` (line ~496): replaced the unconditional `Display_GetColonData(ColonBuffer)` with the same `if (ColonVisible) { Display_GetColonData(...) } else { memset(ColonBuffer, 0, ...) }` pattern already used by `ShowTimedCookingWithPower`.
+  - `UIView_Process` (line ~791): added cases for `UI_VIEW_DISPLAY_CHILD_LOCK` and `UI_VIEW_DISPLAY_POWER_WITH_LOCK`. Both increment `ColonBlinkCounter` and toggle `ColonVisible` at `COLON_BLINK_TICKS`. CHILD_LOCK just ticks the counter (LOC screen has no colon to render). POWER_WITH_LOCK also calls `ShowPowerLevelWithLockIcon()` so the display actually redraws each tick. Not resetting the counter on entry/exit keeps the blink phase continuous across the lock/unlock transitions (user explicitly wanted "resume where it was").
+- **Verification:** Start a timed cooking session — confirm colon blinks at 1 Hz. Long-press lock. During the time+power+lock view the colon should continue to blink at 1 Hz. Long-press again to unlock — colon phase should be continuous (no visible jump).
+- **Status:** Verified
