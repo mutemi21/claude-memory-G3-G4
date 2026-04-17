@@ -98,7 +98,7 @@
 ## Lock LED stays on after exiting child lock in timed cooking
 - **Product:** G3
 - **Date:** 2026-04-17
-- **Branch:** Prescan
+- **Branch:** Prescan (also ported to CHK-Bring-Up as commit ff6bf10)
 - **Files changed:** `ProductFeatures/UI/Src/UIView.c`
 - **Root cause / Purpose:** In a timed cooking session, long-pressing the lock button enters child lock (LOCK_LED on) and pressing again exits (state goes back to `USER_COOKING_WITH_TIMER`) — but the LOCK_LED stayed on. Normal (non-timed) cooking worked fine. The LED was managed only in `EnterChildLock`/`ExitChildLock` in `UIPresenter.c`, gated by `LockToggleCooldown` (set to 2 ticks ≈ 2s on entry). Because `UIPresenter_Tick` runs every 1s and the keypad generates repeated LONG_PRESS events while the button is held, a second LONG_PRESS could arrive while cooldown was still > 0. `ExitChildLock` then returned early without calling `Led_Off(LOCK_LED)`. The asymmetry with normal cooking came from the LED being controlled purely by the presenter state transition — there was no view-level safety net.
 - **What we tried that didn't work:** Traced the full state-machine flow first (UIPresenter_Process → ProcessCommandKeyPress → ExitChildLock → Led_Off). On paper the LED should turn off. The race only manifests because `LockToggleCooldown` can still be non-zero when a held-button fires a second LONG_PRESS.
@@ -109,4 +109,4 @@
   - `ShowPowerLevelWithLockIcon` (line ~474): added `Led_On(LOCK_LED)`
   `EnterChildLock`/`ExitChildLock` still drive the LED too — the view calls are a defensive second path.
 - **Verification:** Start a timed cooking session. Long-press lock → LOCK_LED on + lock screen. Long-press again → LOCK_LED off + back to timed cooking screen with timer and power level. Repeat several times quickly to exercise the cooldown race. Also verify normal cooking still works (lock on/off).
-- **Status:** Untested
+- **Status:** Verified
