@@ -143,3 +143,13 @@
 - **Final solution:** Bound ON/OFF short press to `UI_PRESENTER_STATE_SHOW_OFF_MESSAGE` with action `UIModel_PowerOffPowerBoard`, mirroring the existing `SHOW_ZERO_POWER` pattern.
 - **Verification:** Press ON from STANDBY → "ON" shows. Press ON/OFF within the window → cooker powers off, "OFF" shows, returns to STANDBY.
 - **Status:** Verified
+
+## Usage screen skipped when shutting down from mid-cook error
+- **Product:** G3
+- **Date:** 2026-04-20
+- **Branch:** Prescan (commit eac762f), also on CHK-Bring-Up (commit a442ea7)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c`
+- **Root cause / Purpose:** E0 (pot removed) mid-cooking puts the presenter in `DISPLAY_ERROR`. Pressing ON/OFF in that state used to run `HandleErrorShutdown` which did a minimal teardown and let the state table transition directly to STANDBY — the `SHUTDOWN_USED_LABEL → session-kWh → OFF` usage sequence (which ON/OFF from `USER_COOKING` would normally trigger via `HandleShutdownSequence`) was skipped, so the user never saw their session's kWh.
+- **Final solution:** `HandleErrorShutdown` now inspects `SavedPreErrorState`. If that state was a cooking state, it delegates to `HandleShutdownSequence` (same flow as ON/OFF from USER_COOKING — stops session, records kWh, fan cooldown if session ≥60s, transitions to SHUTDOWN_USED_LABEL). Otherwise it keeps the old minimal teardown path. Also refactored `IsInCookingState()` into a parameterised `IsStateCooking(State)` helper so the pre-error state can be queried.
+- **Verification:** Start cooking, remove pot → E0 displayed. Press ON/OFF → "USEd" shows, then session kWh, then "OFF", then STANDBY. Fan runs if session was ≥60s. Errors that fire outside a cooking state (startup/standby) still jump straight to STANDBY with no usage screen.
+- **Status:** Verified
