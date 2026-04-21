@@ -147,8 +147,18 @@ The residual flash has a hard software floor of a few ms (HAL_Init + SystemClock
 - Startup beep still plays once on boot.
 - **Status:** Verified
 
-### Known residual (not addressed)
-- "Segments flicker on mains unplug" — remains. That's a different root cause (VK16K33 driver instability as Vcc sags during mains-off). Fixes: bulk cap on display rail, or PVD-driven pre-brown-out display shutdown in firmware. Left for hardware revision.
+### Known residual — cannot be fixed in firmware (2026-04-21 investigation)
+**Symptom:** When mains is cut **mid-cook**, the display briefly shows all segments on then flickers off. Not present in ON / USED / USAGE / OFF / STANDBY — only cooking states.
+**Why cooking-specific:** IGBT tank collapse on mains-off produces a noisy, non-monotonic 3.3V rail drop (unlike the clean monotonic decay in idle states). The VK16K33 sits on that rail.
+**Why all segments:** The chip's entire internal state — segment RAM + display-enable bit + oscillator-enable bit — is SRAM. Under the noisy Vcc sag, 6T SRAM cells collapse toward 1. All-bits-1 = all segments lit.
+**What we tried (all ineffective):**
+- PVD at level 6 (~2.75V falling) with ISR sending `CMD_DISPLAY_SETUP | DISPLAY_OFF`. The display-enable bit is itself SRAM and re-flips to 1 during the collapse — the driver comes back ON before we're done.
+- Added `CMD_SYSTEM_SETUP` (oscillator off) in the same ISR. Oscillator-enable bit is also SRAM → same failure.
+**Verified independent:** LEDs do not flicker during the same event → MCU is not resetting and re-running startup. The glitch is purely chip-internal.
+**Only fix is hardware:**
+1. **Bulk cap (22–100 µF) on VK16K33 Vcc** → clean monotonic decay; SRAM stays stable until chip browns out cleanly.
+2. **Power-gate VK16K33 Vcc through a FET** driven by a GPIO; cut via PVD ISR. Eliminates the glitch window entirely.
+**Code left as-is:** PVD scaffolding was added and then reverted (commits visible in git history). Do not re-add without hardware change — it's provably ineffective alone.
 
 ### Later polish (commit 03ce001 / d684d41)
 - `ShowStartupAllOn` now explicitly turns `INFO_PAY_LED` and `BT_LED` off after `Led_AllOn`. Those are excluded from the startup visual by design.
