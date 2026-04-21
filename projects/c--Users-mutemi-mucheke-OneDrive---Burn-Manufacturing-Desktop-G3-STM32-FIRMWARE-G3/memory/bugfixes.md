@@ -173,3 +173,13 @@
 - **Final solution:** Bound both buttons in both states to `UIModel_IncrementPowerSetting` / `UIModel_DecrementPowerSetting` (same as `USER_COOKING`). `NextStateID = NO_SUPPORTED_STATE` so the state stays; pressing PWR+/- during `TIME_SETTING_SCREEN` also resets the state's 2s timeout naturally (via `UIPresenter_Process`), which matches the user's intent of still adjusting.
 - **Verification:** Press `TIMR+` to begin setting a timer. While the static time-setting screen is up, press PWR+ → power level bars increment. Same for PWR-. Wait for acceptance flash to begin, press PWR+ during flash → power level bars update (visible during the flash's on-half). Timer still starts correctly at the end of the flash.
 - **Status:** Verified
+
+## All buttons beep in STANDBY
+- **Product:** G3
+- **Date:** 2026-04-21
+- **Branch:** Prescan (commit 743ec31), also on CHK-Bring-Up (commit 46c0503)
+- **Files changed:** `ProductFeatures/UI/Src/UIView.c`, `ProductFeatures/UI/Src/UIPresenter.c`
+- **Root cause / Purpose:** `UIView_UpdateWithKeyPadEvent` fired `PowerBoard_SingleBeep()` unconditionally on every keypad event. In STANDBY all non-ON/OFF keys are `NO_ACTION_ON_KEYPRESS` yet still produced a beep. Gave the impression buttons were doing something when they weren't.
+- **Final solution:** Moved the beep into `ProcessCommandKeyPress` and gated it on the pressed key having a mapped `NextStateID != NO_SUPPORTED_STATE` or non-NULL action function for the current `(state, duration)`. Generalises the STANDBY fix: any state now beeps only for its mapped bindings (e.g. BT button no longer beeps in USER_COOKING, TIMR+/- silent on SHOW_OFF_MESSAGE, etc.). Beep also sits after the `PendingLockActivation` guard so non-LOCK keys are silent during the queue-lock window.
+- **Verification:** STANDBY: only ON/OFF beeps. USER_COOKING: PWR+/-, TIMR+/-, LOCK, ON/OFF beep; BT doesn't. Queue-lock window (TIME_SETTING_SCREEN with pending lock): only LOCK beeps.
+- **Status:** Verified
