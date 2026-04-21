@@ -163,3 +163,13 @@
 - **Final solution:** Added a dedicated `ErrorAutoShutdownCounter` (bumped each `UIPresenter_Tick` while `ErrorActive && CurrentError == COOKER_ERROR_NO_POT_ERROR && IsStateCooking(SavedPreErrorState)`). At `ERROR_AUTO_SHUTDOWN_SECONDS = 60` it calls `HandleErrorShutdown` — which routes through `HandleShutdownSequence` for cooking pre-error states, so "USEd" → kWh → OFF → STANDBY plays (with fan cooldown if the session was ≥60s). New `CurrentError` static variable tracks the active error code. Also suppressed E0 entirely when it fires outside a cooking state — no `DISPLAY_ERROR` entry in that case. The counter lives outside `StateTimeOutCounter` so key presses during the error do not extend the 60s window.
 - **Verification:** Start cooking, remove pot, do nothing → after 60s cooker auto-shuts down and displays usage. Press ON/OFF before 60s → immediate shutdown (existing behavior). Trigger E0 from STANDBY → no error screen. Re-insert pot before 60s → error clears, counter resets, cooker resumes.
 - **Status:** Verified
+
+## PWR+/- disabled during TIME_SETTING_SCREEN and TIMER_ACCEPTANCE
+- **Product:** G3
+- **Date:** 2026-04-21
+- **Branch:** Prescan (commit 5f37234), also on CHK-Bring-Up (commit f78a528)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c`
+- **Root cause / Purpose:** In `UI_PRESENTER_STATE_TIME_SETTING_SCREEN` and `UI_PRESENTER_STATE_TIMER_ACCEPTANCE` the `PWR_PLUS_BUTTON` and `PWR_MINUS_BUTTON` entries were `NO_ACTION_ON_KEYPRESS`. So once the user pressed `TIMR+` to begin setting a timer, the power level was frozen until the timer actually started counting down (through the 2s idle + ~5s acceptance flash window).
+- **Final solution:** Bound both buttons in both states to `UIModel_IncrementPowerSetting` / `UIModel_DecrementPowerSetting` (same as `USER_COOKING`). `NextStateID = NO_SUPPORTED_STATE` so the state stays; pressing PWR+/- during `TIME_SETTING_SCREEN` also resets the state's 2s timeout naturally (via `UIPresenter_Process`), which matches the user's intent of still adjusting.
+- **Verification:** Press `TIMR+` to begin setting a timer. While the static time-setting screen is up, press PWR+ → power level bars increment. Same for PWR-. Wait for acceptance flash to begin, press PWR+ during flash → power level bars update (visible during the flash's on-half). Timer still starts correctly at the end of the flash.
+- **Status:** Verified
