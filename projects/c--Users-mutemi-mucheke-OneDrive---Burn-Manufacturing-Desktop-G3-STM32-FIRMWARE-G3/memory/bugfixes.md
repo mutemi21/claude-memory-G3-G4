@@ -157,11 +157,11 @@
 ## Persistent E0 (pot removed) never auto-shuts down
 - **Product:** G3
 - **Date:** 2026-04-21
-- **Branch:** Prescan (commit a70a5aa), also on CHK-Bring-Up (commit 4ec65fa)
+- **Branch:** Prescan (commit a70a5aa, timeout later reduced to 30s in bf54aec), also on CHK-Bring-Up (commits 4ec65fa + 44efd5c)
 - **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c`
 - **Root cause / Purpose:** `DISPLAY_ERROR` state had `NextStateID = NO_SUPPORTED_STATE` and `ActionFunction = NULL` on its state timeout — with `TimeOutValue = DEFAULT_STATE_TIMEOUT` (1s) it re-armed every second and did nothing. If the user removed the pot mid-cook and walked away, E0 sat on the display indefinitely; only a manual ON/OFF press would trigger the shutdown flow.
-- **Final solution:** Added a dedicated `ErrorAutoShutdownCounter` (bumped each `UIPresenter_Tick` while `ErrorActive && CurrentError == COOKER_ERROR_NO_POT_ERROR && IsStateCooking(SavedPreErrorState)`). At `ERROR_AUTO_SHUTDOWN_SECONDS = 60` it calls `HandleErrorShutdown` — which routes through `HandleShutdownSequence` for cooking pre-error states, so "USEd" → kWh → OFF → STANDBY plays (with fan cooldown if the session was ≥60s). New `CurrentError` static variable tracks the active error code. Also suppressed E0 entirely when it fires outside a cooking state — no `DISPLAY_ERROR` entry in that case. The counter lives outside `StateTimeOutCounter` so key presses during the error do not extend the 60s window.
-- **Verification:** Start cooking, remove pot, do nothing → after 60s cooker auto-shuts down and displays usage. Press ON/OFF before 60s → immediate shutdown (existing behavior). Trigger E0 from STANDBY → no error screen. Re-insert pot before 60s → error clears, counter resets, cooker resumes.
+- **Final solution:** Added a dedicated `ErrorAutoShutdownCounter` (bumped each `UIPresenter_Tick` while `ErrorActive && CurrentError == COOKER_ERROR_NO_POT_ERROR && IsStateCooking(SavedPreErrorState)`). At `ERROR_AUTO_SHUTDOWN_SECONDS = 30` it calls `HandleErrorShutdown` — which routes through `HandleShutdownSequence` for cooking pre-error states, so "USEd" → kWh → OFF → STANDBY plays (with fan cooldown if the session was ≥60s). New `CurrentError` static variable tracks the active error code. Also suppressed E0 entirely when it fires outside a cooking state — no `DISPLAY_ERROR` entry in that case. The counter lives outside `StateTimeOutCounter` so key presses during the error do not extend the 60s window.
+- **Verification:** Start cooking, remove pot, do nothing → after 30s cooker auto-shuts down and displays usage. Press ON/OFF before 30s → immediate shutdown (existing behavior). Trigger E0 from STANDBY → no error screen. Re-insert pot before 30s → error clears, counter resets, cooker resumes.
 - **Status:** Verified
 
 ## PWR+/- disabled during TIME_SETTING_SCREEN and TIMER_ACCEPTANCE
