@@ -41,7 +41,23 @@
       "Bash(grep -n _DEBUG_ENABLEDs*1 '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/ExternalPeripherals/Display/Src/Display.c' '/c/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/unified-firmware/ExternalPeripherals/RFComms/BTModemDriver/Src/ModemHw.c')",
       "Bash(pip show:*)",
       "Bash(pip install:*)",
-      "Bash(python c:/tmp/generate_test_plan.py)"
+      "Bash(python c:/tmp/generate_test_plan.py)",
+      "Bash(awk ' *)",
+      "Read(//c/Users/mutemi.mucheke/.claude/**)",
+      "Bash(git -C /c/Users/mutemi.mucheke/.claude add \"projects/c--Users-mutemi-mucheke-OneDrive---Burn-Manufacturing-Desktop-G3-STM32-FIRMWARE-G3/memory/MEMORY.md\" \"projects/c--Users-mutemi-mucheke-OneDrive---Burn-Manufacturing-Desktop-G4-FW-STM32-FIRMWARE-G4/memory/MEMORY.md\")",
+      "Bash(git -C /c/Users/mutemi.mucheke/.claude commit -m \"Add reminder to consider CHK and Highway drivers for all changes\")",
+      "Bash(git -C /c/Users/mutemi.mucheke/.claude push)",
+      "Bash(awk '/\\\\[ 4[01]\\\\./')",
+      "Bash(awk '/\\\\[ 4[12]\\\\./')",
+      "Bash(awk '/^\\\\[ *4[01]\\\\./ && / A RX /' \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260424_150333.txt\")",
+      "Bash(awk '/^\\\\[ *41\\\\.[5-9]/ && / A RX /' \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260424_150333.txt\")",
+      "Bash(awk '/^\\\\[ *3[0-9]\\\\./ && / A RX /' \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260424_150333.txt\")",
+      "Bash(grep -c \" ff$\\\\| ff ff\" \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260424_150333.txt\")",
+      "Bash(grep \" ff$\" \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260424_150333.txt\")",
+      "Bash(grep -c \" ff$\" echo \"\" echo \"143859 example: first A RX line ending in ff:\" grep \" A RX\" \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260423_143859.txt\")",
+      "Bash(grep \" ff$\")",
+      "Bash(awk '{for\\(i=4;i<=NF;i++\\) printf \"%s \", $i; print \"\"}')",
+      "Bash(awk '{for\\(i=4;i<=10;i++\\) printf \"%s \", $i; print \"\"}')"
     ],
     "additionalDirectories": [
       "\\tmp",
@@ -54,9 +70,9 @@
       "c:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\Display\\Inc",
       "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\Keypad\\Src",
       "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\G4 FW\\STM32_FIRMWARE_G4\\ExternalPeripherals\\Keypad\\Src",
-      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\InductionCooker\\Src"
+      "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\InductionCooker\\Src",
+      "C:\\Users\\mutemi.mucheke\\.claude"
     ]
   },
-  "effortLevel": "max",
   "autoUpdatesChannel": "latest"
 }
