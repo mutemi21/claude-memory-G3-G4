@@ -1,3 +1,8 @@
+# Working Style
+
+- Before generating a detailed answer, generate high-level answers first to ensure we are on the same page.
+- When troubleshooting, do not guess if you are not sure. Ask me to run a specific test to help gather enough data to solve the problem.
+
 # Memory Reminders
 
 After completing any of the following, ask: "Would you like me to save this to memory?"

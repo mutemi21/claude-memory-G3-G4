@@ -1,5 +1,9 @@
 # G4 Induction Cooker - STM32 Firmware (STM32G071CB, Cortex-M0+)
 
+## Working Style
+- Before generating a detailed answer, generate high-level answers first to ensure we are on the same page.
+- When troubleshooting, do not guess if you are not sure. Ask me to run a specific test to help gather enough data to solve the problem.
+
 ## Before Starting Any Task
 1. **Read `CODEBASE_SUMMARY.md`** in the project root first for full file-by-file context, architecture diagrams, and callback chains.
 2. If the info you need is **not there**, scan the relevant source files, then **update `CODEBASE_SUMMARY.md`** with the new information.

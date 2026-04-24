@@ -1,5 +1,9 @@
 # G3 STM32 Firmware - Project Memory
 
+## Working Style
+- Before generating a detailed answer, generate high-level answers first to ensure we are on the same page.
+- When troubleshooting, do not guess if you are not sure. Ask me to run a specific test to help gather enough data to solve the problem.
+
 ## IMPORTANT: Before Starting Any Task
 **Always read `codebase_summary.md` in this memory directory before solving any task.** It contains a complete file-by-file breakdown of the entire codebase, data flow diagrams, and a "Where to Start" table for common tasks. If the information needed is not there or appears outdated, scan the relevant parts of the codebase first, then update `codebase_summary.md` with the new information before proceeding.
 
