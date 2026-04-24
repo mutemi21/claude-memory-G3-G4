@@ -3,6 +3,7 @@
 ## Working Style
 - Before generating a detailed answer, generate high-level answers first to ensure we are on the same page.
 - When troubleshooting, do not guess if you are not sure. Ask me to run a specific test to help gather enough data to solve the problem.
+- Always consider how a bug fix or feature will affect both CHK and Highway drivers.
 
 ## Before Starting Any Task
 1. **Read `CODEBASE_SUMMARY.md`** in the project root first for full file-by-file context, architecture diagrams, and callback chains.
