@@ -242,3 +242,30 @@
   3. Session now only terminates via the UI's `IndCooker_StopSession` paths (user OFF, E0 auto-shutdown, power-off button) — at which point `LatestSessionData.CookerPower` reflects the full `AccumulatedPower`.
 - **Verification:** user tested lift → return → lift → E0-30s-timeout sequence; shutdown usage screen now shows the full cook kWh instead of the last segment. User confirmed: "The bug is resolved."
 - **Status:** Verified on bench (CHK). Highway path unchanged architecturally — same code drives both. Highway validation still TODO.
+
+## CHK status frames missing AA preamble + truncated — wrong RETURNED_DATA_LENGTH and TX cadence
+- **Product:** G3 (CHK power board only)
+- **Date:** 2026-04-29
+- **Branch:** CHK-Bring-Up (commit 104ac14)
+- **Files changed:** `Core/Src/tim.c`, `ExternalPeripherals/PowerBoard/Src/CHKDriver.c`
+- **Root cause / Purpose:** Cross-referenced the supplier's PC tool serial logs (`C:\Users\mutemi.mucheke\Downloads\IDCSerialLogs\IDCSerialLogs\*.txt`) and the CHK V2 protocol doc (`C:\Users\mutemi.mucheke\Downloads\UART_Protocol_CHK_V2 - EngVer 2.docx`) against our wire traffic. Two settings on the firmware side were forcing the board into a truncated/non-spec response format. The 26-byte frames the PC sees come back as ~14–15 byte mangled fragments to us. Two contributing factors:
+  1. **Control TX byte 5 (`RETURNED_DATA_LENGTH`)**: firmware sent `0x20` (= 32 data bytes); PC tool sends `0x14` (= 20). At `0x20` the board returns a frame that's missing the leading `0xAA`, the trailing `0xFF` EOF, and the checksum byte. At `0x14` the board returns a clean 26-byte frame (length byte `0x16`) that includes all three.
+  2. **TIM7 period (TX cadence)**: firmware sent control frames every 30 ms; PC tool runs at ~110 ms. A 26-byte response at 4800 baud takes ~54 ms, so a new 30 ms TX would arrive while the board was still mid-reply, forcing it to abort. The earlier "the board doesn't include AA" assumption (and the parser hack to accept `0x55`-without-AA + treat status frames as fixed 15-byte with no validation, commit f0a95c6) was a workaround for this self-inflicted condition.
+- **What we tried that didn't work:** First fix attempt (commit f0a95c6) accepted `0x55` without `AA` and skipped EOF + checksum validation for status frames. Worked, but only because we were processing fragmented responses — back-half data (PowerStatus byte, version, ADDxL low-nibble for 12-bit temps, etc.) was simply absent.
+- **How we found it:** user opened a PC-tool serial log (`1800W_SerialLog_2026-02-06_1414-37-33.txt`) and noticed every RX line had a clean `AA 55 16 10 20 ...` preamble. Comparing TX byte 5 between PC and firmware, and timing between consecutive TXs, exposed both differences.
+- **Final solution:** four changes:
+  1. `CHKDriver.c`: `#define RETURNED_DATA_LENGTH 0x14` (was `0x20`). Match PC tool — board now responds with proper 26-byte frames including AA + checksum + EOF.
+  2. `tim.c`: TIM7 `Period = 5499` (was `1499`). Same prescaler 1279 → 110 ms cadence (was 30 ms). Matches PC tool. Note: `tim.c` is CubeMX-generated; if the .ioc gets regenerated this revert needs reapplying — TODO update the .ioc itself.
+  3. `CHKDriver.c` ParseData: reverted the `0x55`-without-AA tolerance and the 15-byte status-frame override. Back to plain length-byte-driven parsing with full EOF + checksum validation.
+  4. `CHKDriver.c` `IsDataValid`: fixed off-by-one. Was `CalculateChecksum(Data, Size-1)`; now `CalculateChecksum(Data, Size)`. The protocol-defined checksum covers all bytes from index 0 up to (but not including) the checksum byte at index `Size`, so the sum needs `Size` iterations, not `Size-1`. Old code happened to work in some cases because the byte just before the checksum was often `0x00` so adding it changed nothing, but for any frame where that byte was non-zero (e.g. on the new clean 26-byte frames), the old check would have rejected legitimate data.
+- **Verification:** dual-sniffer log `chk_dual_20260429_154946.txt` (103 s, 942 board frames):
+  - Every RX is `AA 55 16 10 20 ... <cksum> FF`, 26 bytes ✓
+  - TX byte 5 = `0x14` ✓
+  - TX cadence 109 ms (one timer-aliasing tick off the requested 110) ✓
+  - Pot present → ABSENT → present transitions cleanly handled
+  - Max actual power 2100 W reported normally
+  - Zero silence events >1 s
+  Functional regression on the cooker (heating, usage accumulation, pot-lift E0, E0 auto-shutdown) all still pass.
+- **Reproduction recipe for future Claude instances:** if a CHK installation shows truncated/malformed RX frames in the dual-sniffer logs (no `AA`, no `FF` EOF, intermittent 14–15 byte chunks), check (a) the `RETURNED_DATA_LENGTH` value the firmware writes into TX byte 5, and (b) the TIM7 period. PC-tool reference values are `0x14` and ~110 ms respectively. Anything tighter than that (faster TX cadence) will collide with the board's reply and produce fragments.
+- **Followups (out of scope for this commit):** decode the PowerStatus byte (Byte 16 of the now-complete frame) so brown-out / current-surge / voltage-surge events surface as UI errors. Add `0x03` (IGBT NTC open) and `0x05` (Surface NTC open) cases to `DetectError` — the doc lists those nibbles as "Reserved" but the supplier's fault-injection logs prove the board uses them in practice. Add UI E-code mappings in `ShowErrorStatus` for every `CookerError_e` value currently used (only E0 is wired today; wiring/IGBT-short/surface-short/surface-failure all detect but never display).
+- **Status:** Verified on bench. Did NOT cherry-pick to Prescan — every change is CHK-specific (Highway uses TIM14 + its own driver, doesn't touch TIM7 or CHKDriver.c at runtime).

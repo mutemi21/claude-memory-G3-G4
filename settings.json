@@ -57,7 +57,18 @@
       "Bash(grep -c \" ff$\" echo \"\" echo \"143859 example: first A RX line ending in ff:\" grep \" A RX\" \"c:/Users/mutemi.mucheke/OneDrive - Burn Manufacturing/Desktop/G4 LAB Testing/CHK Test/chk_dual_20260423_143859.txt\")",
       "Bash(grep \" ff$\")",
       "Bash(awk '{for\\(i=4;i<=NF;i++\\) printf \"%s \", $i; print \"\"}')",
-      "Bash(awk '{for\\(i=4;i<=10;i++\\) printf \"%s \", $i; print \"\"}')"
+      "Bash(awk '{for\\(i=4;i<=10;i++\\) printf \"%s \", $i; print \"\"}')",
+      "Read(//c/Users/mutemi.mucheke/Downloads/**)",
+      "Bash(cp \"C:/Users/mutemi.mucheke/Downloads/UART_Protocol_CHK_V2 - EngVer 2.docx\" chk_doc.docx)",
+      "Bash(unzip -o chk_doc.docx -d chk_doc_extracted/)",
+      "Bash(python -c ' *)",
+      "Bash(awk '{print $11}')",
+      "Bash(awk '{print $4, $5}')",
+      "Bash(awk '{print $NF}')",
+      "Bash(grep -v \"^ff$\")",
+      "Bash(awk -F'RX' '{print $2}')",
+      "Bash(awk '{ *)",
+      "Bash(awk '{print $5}')"
     ],
     "additionalDirectories": [
       "\\tmp",
