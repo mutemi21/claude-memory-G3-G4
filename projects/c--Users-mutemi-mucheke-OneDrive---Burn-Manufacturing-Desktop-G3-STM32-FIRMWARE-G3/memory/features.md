@@ -162,3 +162,23 @@ The residual flash has a hard software floor of a few ms (HAL_Init + SystemClock
 
 ### Later polish (commit 03ce001 / d684d41)
 - `ShowStartupAllOn` now explicitly turns `INFO_PAY_LED` and `BT_LED` off after `Led_AllOn`. Those are excluded from the startup visual by design.
+
+## CHK Power Board Wake-Up
+- **Product:** G3
+- **Date:** 2026-05-06
+- **Branch:** CHK-Wakeup-Test
+- **Files changed:** `ExternalPeripherals/PowerBoard/Src/CHKDriver.c`, new file `ExternalPeripherals/PowerBoard/Docs/CHK_WakeUp.md`
+- **Root cause / Purpose:** New G3 hardware revision has CHK power board that enters 0.3 W sleep after ~100 ms of UART silence. Once asleep its MCU stops responding, including to subsequent commands — any TIM7 interruption silently bricks the cooker until power-cycle. Need a deliberate wake mechanism + auto-recovery watchdog.
+- **What we tried that didn't work:**
+  - Supplier-doc HIGH→LOW pulse on both PB10/PB11 at any width (150 ns, 5 µs, 200 ms, 20-pulse burst). All FAIL.
+  - Hold PB11 LOW alone (1500 ms) without TX activity. FAIL — proves TX is required.
+  - TX frames alone, no PB11 manipulation. FAIL — proves hold is required.
+  - TX BEFORE the hold. FAIL — proves coincidence is required.
+  - TX AFTER hold release. FAIL — proves coincidence is required.
+  - Drive PB11 HIGH (instead of LOW) with TX during. FAIL — polarity matters.
+  - Hold > 3000 ms with TX at start. FAIL — TX→release gap exceeds the wake-detect's ~3 s recency window.
+- **Final solution:** Non-blocking 3-state machine in `CHKDriver.c` — `WakePowerBoard_Begin()` kicks off (drives PB11 LOW via GPIO, queues one control frame on PB10 in USART AF), `WakePowerBoard_Tick()` runs every `CHKDriver_Process` iteration and advances state on elapsed-time thresholds (TX_IN_FLIGHT for 30 ms, then SETTLE for 10 ms, then back to IDLE). Main loop never blocks — UI/keypad/BLE stay responsive throughout recovery. TIM7 stops for the whole 40 ms wake window (below the board's 100 ms sleep threshold). Triggered by a 500 ms RX-timeout watchdog gated on `WakeState == IDLE`. Critical impl detail: pre-clear PB11 ODR via BSRR BEFORE flipping MODER from AF to OUTPUT, otherwise the mode change produces a ~544 ns spurious LOW edge before the deliberate one. Test harness was removed post-validation; a 200+ cycle scenario stress-test characterised the operational envelope and is preserved in git history on branch `CHK-Wakeup-Test`.
+- **Hardware dependency:** 1 kΩ series resistor on the powerboard's TX line (= STM32 RX = PB11) limits contention current when our GPIO push-pull drives the line LOW against the powerboard's own TX driver. Without this resistor, future hardware would risk driver damage.
+- **Verification:** 38/38 PASS across 8 silence depths from 50 ms to 5 minutes. 19/19 PASS across 5 settle durations from 0 to 100 ms. Production-mode disconnect-test (manually unplug TX briefly) recovers cleanly every time.
+- **Status:** Verified
+- **Detailed write-up:** `ExternalPeripherals/PowerBoard/Docs/CHK_WakeUp.md` — full technical doc covering mechanism, what failed, operational envelope, and known limitations.

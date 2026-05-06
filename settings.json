@@ -68,7 +68,19 @@
       "Bash(grep -v \"^ff$\")",
       "Bash(awk -F'RX' '{print $2}')",
       "Bash(awk '{ *)",
-      "Bash(awk '{print $5}')"
+      "Bash(awk '{print $5}')",
+      "Bash(awk -F, ' *)",
+      "Bash(grep -iE \"chk|dual|sniff\\\\.py$|\\\\.py$\")",
+      "Read(//c/Users/mutemi.mucheke/**)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('chk_dual_sniff.py'\\).read\\(\\)\\); print\\('chk_dual_sniff.py: OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('chk_test.py'\\).read\\(\\)\\); print\\('chk_test.py: OK'\\)\")",
+      "Bash(awk '-F ' ' *)",
+      "Bash(awk '-F[][]' ' *)",
+      "Bash(python -m pip install pandas openpyxl --quiet)",
+      "Bash(unzip -p \"0.3W主板唤醒方式 1 \\(1\\).docx\" word/document.xml)",
+      "Bash(grep -v '^$')",
+      "Bash(cmake --build build/Debug --target STM32_FIRMWARE_G3)",
+      "Bash(cat >> *)"
     ],
     "additionalDirectories": [
       "\\tmp",
@@ -82,7 +94,9 @@
       "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\Keypad\\Src",
       "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\G4 FW\\STM32_FIRMWARE_G4\\ExternalPeripherals\\Keypad\\Src",
       "C:\\Users\\mutemi.mucheke\\OneDrive - Burn Manufacturing\\Desktop\\unified-firmware\\ExternalPeripherals\\InductionCooker\\Src",
-      "C:\\Users\\mutemi.mucheke\\.claude"
+      "C:\\Users\\mutemi.mucheke\\.claude",
+      "C:\\tmp",
+      "C:\\Users\\mutemi.mucheke\\.claude\\projects\\c--Users-mutemi-mucheke-OneDrive---Burn-Manufacturing-Desktop-G3-STM32-FIRMWARE-G3\\memory"
     ]
   },
   "autoUpdatesChannel": "latest"
