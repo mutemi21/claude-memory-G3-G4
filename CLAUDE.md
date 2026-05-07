@@ -11,6 +11,21 @@ After completing any of the following, ask: "Would you like me to save this to m
 - Architectural decision or important pattern discovery
 - Any workaround or non-obvious solution that took multiple attempts
 
+## CHK power board reference
+
+The CHK 2 kW power board is shared between G3 and G4. The corrected/extended
+protocol reference lives at `<project>/memory/chk.md` in **both** the G3 and G4
+project memory directories. Before doing any CHK-protocol or CHK-driver work,
+read the `chk.md` in the project you're currently in. The original supplier
+doc has gaps — undocumented exception codes, no glass-over-temp signal, an
+incorrect example value for `RETURNED_DATA_LENGTH`, etc. — and `chk.md`
+documents what we have actually observed on the wire.
+
+**When updating `chk.md`, update both copies** so the two projects stay in
+sync:
+- `~/.claude/projects/c--Users-...-G3-STM32-FIRMWARE-G3/memory/chk.md`
+- `~/.claude/projects/c--Users-...-G4-FW-STM32-FIRMWARE-G4/memory/chk.md`
+
 When saving, use this format and append to the existing file:
 
 ```

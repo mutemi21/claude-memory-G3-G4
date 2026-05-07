@@ -8,6 +8,8 @@
 ## IMPORTANT: Before Starting Any Task
 **Always read `codebase_summary.md` in this memory directory before solving any task.** It contains a complete file-by-file breakdown of the entire codebase, data flow diagrams, and a "Where to Start" table for common tasks. If the information needed is not there or appears outdated, scan the relevant parts of the codebase first, then update `codebase_summary.md` with the new information before proceeding.
 
+**For anything CHK-protocol or CHK-driver related, also read [`chk.md`](chk.md) first.** The original supplier doc (`UART_Protocol_CHK_V2 - EngVer 2.docx`) has gaps and ambiguities — undocumented exception codes, no glass-over-temp signal, an `0x20` returned-data-length value that contradicts what the board actually emits, etc. `chk.md` is the corrected/extended reference combining the supplier doc with everything we have observed in firmware testing. The same CHK power board is used on G4, so this file is mirrored at `~/.claude/projects/c--Users-...-G4-FW-STM32-FIRMWARE-G4/memory/chk.md`. **When updating `chk.md`, update both copies.**
+
 ## Project Overview
 STM32G0 induction cooker firmware with credit/token-based usage system.
 Branch: EHD-1537-G3-Custom-Display-Mapping

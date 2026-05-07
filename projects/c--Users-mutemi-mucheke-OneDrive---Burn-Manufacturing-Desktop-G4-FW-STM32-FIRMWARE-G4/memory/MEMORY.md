@@ -9,6 +9,7 @@
 1. **Read `CODEBASE_SUMMARY.md`** in the project root first for full file-by-file context, architecture diagrams, and callback chains.
 2. If the info you need is **not there**, scan the relevant source files, then **update `CODEBASE_SUMMARY.md`** with the new information.
 3. After adding/modifying files, update their entries in `CODEBASE_SUMMARY.md`.
+4. **For anything CHK-protocol or CHK-driver related, also read [`chk.md`](chk.md) first.** The original supplier doc (`UART_Protocol_CHK_V2 - EngVer 2.docx`) has gaps and ambiguities — undocumented exception codes, no glass-over-temp signal, an `0x20` returned-data-length value that contradicts what the board actually emits, etc. `chk.md` is the corrected/extended reference combining the supplier doc with everything we have observed in firmware testing. The same CHK power board is used on G3, so this file is mirrored at `~/.claude/projects/c--Users-...-G3-STM32-FIRMWARE-G3/memory/chk.md`. **When updating `chk.md`, update both copies.**
 
 ## Full Codebase Summary
 - See [codebase_map.md](codebase_map.md) for memory copy of codebase breakdown
