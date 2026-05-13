@@ -46,3 +46,6 @@
 - Shadow/device twin: `ProductFeatures/Shadow/Src/Shadow.c` (server JSON, due date)
 - Security data (keys, prod date): `ProductFeatures/SecData/Src/SecDataStore.c` (MCU flash page 63)
 - Device settings (PAYGO serial/version): `ProductFeatures/DeviceSettings/Src/DeviceSettings.c`
+
+## Documented Features
+See [features.md](features.md) for behaviour and source-file references for features that have been traced/documented (e.g. Info button → last-session kWh recall).
