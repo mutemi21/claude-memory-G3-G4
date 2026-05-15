@@ -269,3 +269,24 @@
 - **Reproduction recipe for future Claude instances:** if a CHK installation shows truncated/malformed RX frames in the dual-sniffer logs (no `AA`, no `FF` EOF, intermittent 14–15 byte chunks), check (a) the `RETURNED_DATA_LENGTH` value the firmware writes into TX byte 5, and (b) the TIM7 period. PC-tool reference values are `0x14` and ~110 ms respectively. Anything tighter than that (faster TX cadence) will collide with the board's reply and produce fragments.
 - **Followups (out of scope for this commit):** decode the PowerStatus byte (Byte 16 of the now-complete frame) so brown-out / current-surge / voltage-surge events surface as UI errors. Add `0x03` (IGBT NTC open) and `0x05` (Surface NTC open) cases to `DetectError` — the doc lists those nibbles as "Reserved" but the supplier's fault-injection logs prove the board uses them in practice. Add UI E-code mappings in `ShowErrorStatus` for every `CookerError_e` value currently used (only E0 is wired today; wiring/IGBT-short/surface-short/surface-failure all detect but never display).
 - **Status:** Verified on bench. Did NOT cherry-pick to Prescan — every change is CHK-specific (Highway uses TIM14 + its own driver, doesn't touch TIM7 or CHKDriver.c at runtime).
+
+## TIMR+/- inert during timer-acceptance flash
+- **Product:** G3
+- **Date:** 2026-05-14
+- **Branch:** Prescan (commit b1f620e) + ported to CHK-Bring-Up (commit 393aa95, clean cherry-pick)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c` (only the `UI_PRESENTER_STATE_TIMER_ACCEPTANCE` state-table entry)
+- **Root cause / Purpose:** When the user finished editing a cook timer in `TIME_SETTING_SCREEN` and the 3 s idle timeout transitioned the UI to `TIMER_ACCEPTANCE` (the 5× flash before timer activation), the `TIMR_PLUS_BUTTON` and `TIMR_MINUS_BUTTON` entries were both `NO_ACTION_ON_KEYPRESS`. The flash window is ~5 s long, so any user attempt to keep adjusting the timer during that window did nothing — they had to wait for the flash to finish, watch the timer become active, then press TIMR+/- (which re-routes back to `TIME_SETTING_SCREEN` with the increment applied). Felt broken because PWR+/- already worked in this state (enabled by an earlier commit `5f37234`) but TIMR+/- did not.
+- **Final solution:** wired `TIMR_PLUS_BUTTON` and `TIMR_MINUS_BUTTON` on `TIMER_ACCEPTANCE` identically to how they're wired on `USER_COOKING_WITH_TIMER`:
+  ```c
+  .ActionsOnKeyPress[TIMR_PLUS_BUTTON] = {
+      .LongPressNextStateID = UI_PRESENTER_STATE_TIME_SETTING_SCREEN,
+      .ActionFunctionLongPress = UIModel_IncrementTimerSettingFast,
+      .ShortPressNextStateID = UI_PRESENTER_STATE_TIME_SETTING_SCREEN,
+      .ActionFunctionShortPress = UIModel_IncrementTimerSetting
+  }
+  ```
+  (and the mirror for `TIMR_MINUS_BUTTON` with the Decrement variants). The dispatcher applies the action first, then transitions to `TIME_SETTING_SCREEN`, and `UIPresenter_Process` resets `StateTimeOutCounter` to that state's `TimeOutValue` (= 2 → 3 s effective) after the keypad event. Result: pressing TIMR+/- during the flash cancels the flash, applies the increment/decrement, and gives the user another 3 s of editing time. If they then release, `HandleTimerSettingTimeout` runs again and re-enters `TIMER_ACCEPTANCE` — the existing tick-handler at `UIView.c` detects `AcceptancePreviousView != UI_VIEW_TIMER_ACCEPTANCE_FLASH` and restarts the 5× flash counters from scratch, so the visual is a clean fresh flash, not a continuation.
+- **PendingLockActivation preservation:** the round trip through `TIME_SETTING_SCREEN` → `TIMER_ACCEPTANCE` does not touch `PendingLockActivation`, so a lock queued via LOCK long-press during `TIME_SETTING_SCREEN` still activates inside `StartTimerAfterAcceptance` when the final acceptance completes. No additional code needed for this.
+- **Verification:** bench-tested on Prescan against the live cooker. Pressing TIMR+ during the flash → screen returns to TIME_SETTING_SCREEN at value+1; holding TIMR+ → +15 min jump; releasing and waiting ~3 s → fresh 5× flash, then timer becomes active normally. User confirmed.
+- **Reproduction recipe for future Claude instances:** if any state in the UI presenter is missing key bindings (`NO_ACTION_ON_KEYPRESS`) for keys that should naturally interrupt that state, check whether the missing-key behaviour is intentional (a deliberate inert window) or an oversight (key was forgotten when the state was added). The `TIMER_ACCEPTANCE` PWR+/- entries had been added in commit `5f37234` for the same UX reason — TIMR+/- in this fix was the matching twin.
+- **Status:** Verified
