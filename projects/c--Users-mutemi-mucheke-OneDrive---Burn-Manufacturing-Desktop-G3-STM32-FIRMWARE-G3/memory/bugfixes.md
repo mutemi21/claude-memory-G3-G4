@@ -290,3 +290,35 @@
 - **Verification:** bench-tested on Prescan against the live cooker. Pressing TIMR+ during the flash → screen returns to TIME_SETTING_SCREEN at value+1; holding TIMR+ → +15 min jump; releasing and waiting ~3 s → fresh 5× flash, then timer becomes active normally. User confirmed.
 - **Reproduction recipe for future Claude instances:** if any state in the UI presenter is missing key bindings (`NO_ACTION_ON_KEYPRESS`) for keys that should naturally interrupt that state, check whether the missing-key behaviour is intentional (a deliberate inert window) or an oversight (key was forgotten when the state was added). The `TIMER_ACCEPTANCE` PWR+/- entries had been added in commit `5f37234` for the same UX reason — TIMR+/- in this fix was the matching twin.
 - **Status:** Verified
+
+## Timer-expiry shutdown sequence skipped on INFO_REALTIME_TIMED
+- **Product:** G3
+- **Date:** 2026-05-14
+- **Branch:** Prescan (commit fb9c6e8) + ported to CHK-Bring-Up (commit 0ef30ad, clean cherry-pick)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c` (only `IsTimerActiveState`)
+- **Root cause / Purpose:** Reported by user: set timer 0:02, start cooking, press INFO to enter `INFO_REALTIME_TIMED`. Timer counted down 0:02 → 0:01, kWh accumulated live. When the 2 min elapsed: heater stopped correctly, **but** the timer display froze at 0:01, kWh display dropped to 0.00, and the normal SHUTDOWN_USED_LABEL → SHUTDOWN_SESSION_USAGE → STANDBY sequence never ran. UI stayed in `INFO_REALTIME_TIMED` indefinitely (would have hit 4-hour auto-off eventually).
+
+  The bug was introduced when I added `INFO_REALTIME[_TIMED][_LOCKED]` to `IsTimerActiveState()` while wiring up the realtime feature — the addition was gated on `UIModel_IsCookTimerRunning()`:
+  ```c
+  if ((CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME ||
+       CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED ||
+       CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_LOCKED ||
+       CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED_LOCKED) &&
+      UIModel_IsCookTimerRunning()) {
+      return true;
+  }
+  ```
+  The guard intent was to filter out non-timed realtime entries. But the moment the timer hits zero, `IndCooker_Tick()` clears `TimerRunning` and the power-board status callback runs `CookerState_Off` (which finalizes kWh to flash + zeros `CurrentSession`). All this happens *before* `HandleTimerExpiry()` next runs from `UIPresenter_Tick`. By then `UIModel_IsCookTimerRunning()` returns false → guard fails → `HandleTimerExpiry` returns early — the shutdown transition is skipped.
+
+  Why the cooker still goes off: the side-channel `PowerBoardStatusCb → CookerState_Off → StopSession → CookingSession_Stop` path is what actually stops the heater + finalizes the session. That's why the heater goes silent but the UI is frozen. And why kWh shows 0.00: `CookingSession_GetCurrentSession()` returns -1 (no active session), so `ShowRealtimeTimedPower` falls back to `Value = 0.0f` per its existing logic.
+- **Final solution:** removed the `UIModel_IsCookTimerRunning()` guard for the timed-realtime variants — they now return true unconditionally, matching the `USER_COOKING_WITH_TIMER` pattern. Non-timed `INFO_REALTIME` / `INFO_REALTIME_LOCKED` were dropped from the list entirely (they're only reachable from `USER_COOKING` where no timer can be running, so they never needed to be there). Resulting code:
+  ```c
+  if (CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED ||
+      CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED_LOCKED) {
+      return true;
+  }
+  ```
+  With this, `HandleTimerExpiry`'s `UIModel_HasCookTimerExpired` check fires correctly, `CurrentUIPresenterState` transitions to `SHUTDOWN_USED_LABEL`, and the standard "USED" → final-kWh → STANDBY sequence plays. The double-stop / double-PowerOff calls inside `HandleTimerExpiry` are no-ops at this point (already done by the side channel) — safe. The "USED" / final-kWh screens read from `SessionAggr.LatestSessionData.CookerPower` which was populated by the side-channel `CookingSession_Stop`, so the user sees the correct cook total.
+- **Verification:** bench-test recipe — set timer 0:01, start cooking, press INFO to enter `INFO_REALTIME_TIMED`, wait for expiry. Expect: heater stops, screen advances to "USED" (5 s), then final kWh (10 s), then STANDBY. Also confirm the locked variant: same recipe but LOCK long-press before expiry to be on `INFO_REALTIME_TIMED_LOCKED` — LOCK_LED should turn off as part of the transition (already covered by the existing LOCK_LED cleanup branch in `HandleTimerExpiry` which I had added when wiring the locked-realtime states).
+- **Reproduction recipe for future Claude instances:** when adding a new UI state that should preserve timer-active behaviour, check both `IsStateCooking()` AND `IsTimerActiveState()` — but for `IsTimerActiveState` specifically, do NOT gate on `UIModel_IsCookTimerRunning()` for states reached from `USER_COOKING_WITH_TIMER`. Timer-running flag racing the expiry tick is a documented hazard. The safe pattern is "this state inherits the timer-active status of its entry context unconditionally" (same as `USER_COOKING_WITH_TIMER` itself, which doesn't self-check).
+- **Status:** Verified
