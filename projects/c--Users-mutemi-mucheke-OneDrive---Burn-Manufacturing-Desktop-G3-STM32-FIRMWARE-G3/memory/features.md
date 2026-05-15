@@ -182,3 +182,63 @@ The residual flash has a hard software floor of a few ms (HAL_Init + SystemClock
 - **Verification:** 38/38 PASS across 8 silence depths from 50 ms to 5 minutes. 19/19 PASS across 5 settle durations from 0 to 100 ms. Production-mode disconnect-test (manually unplug TX briefly) recovers cleanly every time.
 - **Status:** Verified
 - **Detailed write-up:** `ExternalPeripherals/PowerBoard/Docs/CHK_WakeUp.md` — full technical doc covering mechanism, what failed, operational envelope, and known limitations.
+
+## Info button — realtime current-session + last-session usage screens
+- **Product:** G3
+- **Date:** 2026-05-14
+- **Branch:** Prescan (commit 6862220) + ported to CHK-Bring-Up (commit 8d87b80)
+- **Files changed:** `ProductFeatures/UI/Inc/UIPresenter.h`, `ProductFeatures/UI/Inc/UIView.h`, `ProductFeatures/UI/Src/UIPresenter.c`, `ProductFeatures/UI/Src/UIView.c`
+- **Purpose:** Wire the dedicated `ENERGY_INFO_BUTTON` (X12A cap-touch bit `0x0020` on I2C addr 2, already declared in `Keypad.h` but inert in the UI) to two parallel UX flows: glance at the **last completed session's kWh** from STANDBY, and watch the **current session's kWh live** during cooking. Required so paygo users can check usage without leaving the cooking screen.
+
+### Hardware mapping (already in place, no change)
+`ENERGY_INFO_BUTTON` is declared in `Keypad.h` and mapped in `X12ACapTouch.c` at `X12A_CAP_TOUCH_KEY_ENERGY_INFO_BUTTON = 0x0020`. Prior to this feature it was wired in code but no UI state acted on it.
+
+### State machine additions (`UIPresenter.c`)
+Seven new active states + two dormant RTC-blocked pairs:
+- `INFO_LAST_SESSION_LABEL` (view `UI_VIEW_DISPLAY_STRING_USED` → "USED", 3 s) → `INFO_LAST_SESSION_VALUE` (view `UI_VIEW_DISPLAY_SESSION_POWER` → last-session kWh + KWH icon, 10 s) → STANDBY. Reached from `STANDBY[ENERGY_INFO_BUTTON]` short press.
+- `INFO_REALTIME` (view `UI_VIEW_DISPLAY_REALTIME_POWER`, no timeout) — entered from `USER_COOKING[ENERGY_INFO_BUTTON]`. Shows live `CookingSession.AccumulatedPower` via `CookingSession_GetCurrentSession()` + KWH icon, refreshed at 1 Hz from a new case in `UIView_Process`.
+- `INFO_REALTIME_TIMED` (view `UI_VIEW_DISPLAY_REALTIME_TIMED_POWER`) — entered from `USER_COOKING_WITH_TIMER[ENERGY_INFO_BUTTON]`. Shows timer (DIGIT_1-3) + HOUR/MIN icons + blinking colon (`COLON_BLINK_TICKS = 10`) + kWh value at DIGIT_4-7 with dot + KWH icon. Re-renders every tick (100 ms) for the colon; kWh source updates ~1 Hz.
+- `INFO_REALTIME_LOCKED` / `INFO_REALTIME_TIMED_LOCKED` — same views, with `LOCK_ICON` overlaid via `UIPresenter_IsRealtimeLocked()` check inside `ShowRealtimePower` (third arg to new `RenderKwhFloat` helper) and inside `ShowRealtimeTimedPower`. Both also `Led_On(LOCK_LED)` on every render so the LED stays asserted.
+- `INFO_DAILY_LABEL`, `INFO_DAILY_VALUE`, `INFO_MONTHLY_LABEL`, `INFO_MONTHLY_VALUE` — **wrapped in `#if 0 … #endif`** with a `TODO(RTC)` comment. The hardware lacks a populated RTC, so `SessionAggr_UpdatePowerUsage()`'s daily/monthly rollover cannot work. To re-enable: remove the `#if 0`, change `STANDBY.ActionsOnKeyPress[ENERGY_INFO_BUTTON].ShortPressNextStateID` from `UI_PRESENTER_STATE_INFO_LAST_SESSION_LABEL` back to `UI_PRESENTER_STATE_INFO_DAILY_LABEL`, optionally remove the LAST_SESSION states.
+
+### Key matrix on the realtime states
+| State | LOCK short | LOCK long | INFO short | PWR+/-, TIMR+/- short | ON/OFF short | Auto-timeout |
+|---|---|---|---|---|---|---|
+| `INFO_REALTIME[_TIMED]` (unlocked) | inert | `RealtimeEngageLock` → LOCKED variant | `ManageTransitionFromPowerUsageDisplay` (toggle off → cooking) | `RealtimePwr/TimrPlus/MinusExit` (apply + transition) | `HandleShutdownSequence` | none — persists |
+| `INFO_REALTIME[_TIMED]_LOCKED` | inert | `RealtimeDisengageLock` → unlocked variant | inert | inert | inert | none |
+
+### Helper functions added (`UIPresenter.c`, static)
+`RealtimePwrPlusExit`, `RealtimePwrMinusExit`, `RealtimeTimrPlusExit`, `RealtimeTimrMinusExit`, `RealtimeEngageLock`, `RealtimeDisengageLock`. The TIMR helpers call `UIModel_Increment/DecrementTimerSetting` only when `UIModel_IsCookTimerRunning()` is true (mirrors the difference between USER_COOKING and USER_COOKING_WITH_TIMER's TIMR+/- behaviour). `RealtimeEngageLock` sets `SavedPreLockState` to the *cooking* state (not the realtime state) so a later unlock returns the user to cooking, not realtime; it also honours `LockToggleCooldown` to match `EnterChildLock`'s debounce.
+
+### Views (`UIView.c`)
+- New: `ShowString1D`, `ShowString30D` (dormant, registered for the disabled daily/monthly path), `ShowRealtimePower`, `ShowRealtimeTimedPower`.
+- New helper `RenderKwhFloat(float Value, bool IncludeMonthIcon, bool IncludeLockIcon)` consolidates the digit-formatting, dot overlay, KWH icon, optional MONTH icon, optional LOCK icon logic — caps at 99.99 kWh with two-decimal precision, same digit alignment as the existing `ShowSessionPower`. Called by `ShowDailyPowerUsage`, `ShowMonthlyPowerUsage`, `ShowRealtimePower`.
+- `ShowRealtimeTimedPower` constructs a single 7-char `snprintf` string `"%d%02d %d%d%d"` (or `"%d%02d%d%d%d%d"` for ≥ 10 kWh) so timer occupies DIGIT_1-3 and kWh occupies DIGIT_5-7 (or 4-7), with the colon between digits 1 and 2 (gated by `ColonVisible`) and the dot at the fixed position 5↔6.
+- `UIView_Process` got a new `UI_VIEW_DISPLAY_REALTIME_POWER` case that re-calls `ShowRealtimePower` every 10 ticks (1 s) via a static counter, and a new `UI_VIEW_DISPLAY_REALTIME_TIMED_POWER` case that re-renders every tick (matching the existing `TIMED_COOKING_WITH_POWER` cadence so the colon visibly blinks).
+
+### Integration with existing helpers
+- `IsStateCooking()` — added `INFO_REALTIME`, `INFO_REALTIME_TIMED`, `INFO_REALTIME_LOCKED`, `INFO_REALTIME_TIMED_LOCKED`. Keeps the 4-hour auto-off counter ticking and pauses the fan cooldown while realtime is showing mid-cook.
+- `IsTimerActiveState()` — added the same four states, all guarded by `UIModel_IsCookTimerRunning()`. Ensures `HandleTimerExpiry` still fires the shutdown sequence if the cooking timer hits zero while the user is viewing realtime.
+- `HandleTimerExpiry()` LOCK_LED cleanup — added the two `_LOCKED` realtime states alongside the existing `CHILD_LOCK[_SHOW_POWER]` check, so `LOCK_LED` is turned off when timer-expiry transitions to `SHUTDOWN_USED_LABEL`.
+- New public getter `UIPresenter_IsRealtimeLocked()` (declared in `UIPresenter.h`) used by `ShowRealtimePower`/`ShowRealtimeTimedPower` to decide whether to overlay `LOCK_ICON` and assert `Led_On(LOCK_LED)`. UIView already includes `UIPresenter.h` for the existing `UIPresenter_IsLockPending` / `UIPresenter_IsLockPhaseLoc` calls.
+
+### Constants added
+- `STANDBY_INFO_LABEL_TIMEOUT = 2` (→ 3 s effective, fires on tick N+1). Existing `INFO_LABEL_TIMEOUT = 4` (5 s) is reserved for the `SHUTDOWN_USED_LABEL` path and left alone. Existing `INFO_VALUE_TIMEOUT = 9` (10 s) reused for `INFO_LAST_SESSION_VALUE` and the realtime states' (unused) timeout value.
+
+### Behaviour summary
+```
+STANDBY ──INFO short──▶ "USED" (3s) ─auto─▶ last-session kWh (10s) ─auto─▶ STANDBY
+                          │ INFO or ON/OFF → STANDBY
+
+USER_COOKING ──INFO short──▶ INFO_REALTIME (full-screen kWh, persists)
+                                │ LOCK long → INFO_REALTIME_LOCKED (kWh + LOCK_ICON)
+                                │ INFO → cooking; PWR+/- → cooking + apply; ON/OFF → shutdown
+
+USER_COOKING_WITH_TIMER ──INFO──▶ INFO_REALTIME_TIMED (timer + blinking colon + kWh)
+                                  │ LOCK long → INFO_REALTIME_TIMED_LOCKED
+                                  │ (other keys same as above)
+```
+
+- **Verification:** Bench-tested on Prescan against the live cooker. Confirmed: STANDBY INFO short → "USED" then kWh; cooking INFO short → live kWh updating ~1 Hz; timed cooking INFO short → timer + kWh together with blinking colon; LOCK long on realtime → LOCK_ICON appears + screen persists + all other keys inert; LOCK long again → unlocks + still on realtime; INFO toggle and any non-LOCK key exit + apply normal action from unlocked realtime. Daily/monthly states confirmed unreachable (RTC limitation), STANDBY INFO short routes to LAST_SESSION instead.
+- **Status:** Verified
+
