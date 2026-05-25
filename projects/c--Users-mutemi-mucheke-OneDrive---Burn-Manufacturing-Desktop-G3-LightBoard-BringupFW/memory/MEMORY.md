@@ -1,0 +1,1 @@
+- [Bugfixes](bugfixes.md) — record of bugs found in this repo and how they were fixed. Currently: STM32G071 -> STM32G0B0 migration + LSE/MCO bringup pitfalls (WIP — applies to other G07x/G08x repos that may migrate later).
