@@ -322,3 +322,74 @@
 - **Verification:** bench-test recipe — set timer 0:01, start cooking, press INFO to enter `INFO_REALTIME_TIMED`, wait for expiry. Expect: heater stops, screen advances to "USED" (5 s), then final kWh (10 s), then STANDBY. Also confirm the locked variant: same recipe but LOCK long-press before expiry to be on `INFO_REALTIME_TIMED_LOCKED` — LOCK_LED should turn off as part of the transition (already covered by the existing LOCK_LED cleanup branch in `HandleTimerExpiry` which I had added when wiring the locked-realtime states).
 - **Reproduction recipe for future Claude instances:** when adding a new UI state that should preserve timer-active behaviour, check both `IsStateCooking()` AND `IsTimerActiveState()` — but for `IsTimerActiveState` specifically, do NOT gate on `UIModel_IsCookTimerRunning()` for states reached from `USER_COOKING_WITH_TIMER`. Timer-running flag racing the expiry tick is a documented hazard. The safe pattern is "this state inherits the timer-active status of its entry context unconditionally" (same as `USER_COOKING_WITH_TIMER` itself, which doesn't self-check).
 - **Status:** Verified
+
+## Error recovery from realtime states fell through to STANDBY + LOCK_LED stuck
+- **Product:** G3
+- **Date:** 2026-06-04
+- **Branch:** Prescan (commit 25df579) + ported to CHK-Bring-Up (commit 0c26d7d, clean cherry-pick via auto-merge)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c` (only `UIPresenter_HandleError`'s NO_ERROR branch)
+- **Symptom (when looking at it from the user's perspective):** any time an error fired while the user was on a realtime screen, the error screen displayed correctly until the error cleared — and then the UI dropped to STANDBY instead of returning to realtime. If the user had engaged child lock on the realtime screen (`INFO_REALTIME_LOCKED` or `INFO_REALTIME_TIMED_LOCKED`), the LOCK_LED was left visibly on after the STANDBY transition, with no way to clear it short of toggling lock again from cooking.
+- **Root cause / Purpose:** `UIPresenter_HandleError()`'s NO_ERROR branch (i.e. the path that runs when `PowerBoardErrorCb` reports the error has cleared) compares `SavedPreErrorState` against a hard-coded whitelist of states to restore to: `USER_COOKING`, `USER_COOKING_WITH_TIMER`, `TIME_SETTING_SCREEN`, `CHILD_LOCK`, `CHILD_LOCK_SHOW_POWER`. Any state not in that list falls through the `else` branch to `CurrentUIPresenterState = UI_PRESENTER_STATE_STANDBY`. When the realtime/info-button feature was added, the four realtime variants (`INFO_REALTIME`, `INFO_REALTIME_TIMED`, `INFO_REALTIME_LOCKED`, `INFO_REALTIME_TIMED_LOCKED`) were not added to that whitelist — so any error-clear from any of those states landed in STANDBY. The LOCK_LED stickiness is a side-effect of the same bug: the STANDBY-fall-through path didn't call `Led_Off(LOCK_LED)`, so the LED that had been asserted on every render of a locked-realtime view stayed on after the view changed away.
+- **Final solution:** add all four realtime variants to the whitelist of states `SavedPreErrorState` can be restored to. For the locked variants the view's render path already calls `Led_On(LOCK_LED)` on every frame, so the LED self-recovers correctly when the locked-realtime view is restored — no explicit `Led_On` is needed in `UIPresenter_HandleError`. Also added a defensive `Led_Off(LOCK_LED)` in the STANDBY fallback `else` branch to catch any remaining paths where a state outside the whitelist legitimately falls back to STANDBY with a stale LED on. The new whitelist looks like:
+  ```c
+  if(SavedPreErrorState == UI_PRESENTER_STATE_USER_COOKING ||
+     SavedPreErrorState == UI_PRESENTER_STATE_USER_COOKING_WITH_TIMER ||
+     SavedPreErrorState == UI_PRESENTER_STATE_TIME_SETTING_SCREEN ||
+     SavedPreErrorState == UI_PRESENTER_STATE_CHILD_LOCK ||
+     SavedPreErrorState == UI_PRESENTER_STATE_CHILD_LOCK_SHOW_POWER ||
+     SavedPreErrorState == UI_PRESENTER_STATE_INFO_REALTIME ||
+     SavedPreErrorState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED ||
+     SavedPreErrorState == UI_PRESENTER_STATE_INFO_REALTIME_LOCKED ||
+     SavedPreErrorState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED_LOCKED) {
+      UIModel_RestorePowerLevel(SavedPreErrorPowerLevel);
+      if(TimerWasRunningBeforeError) { IndCooker_ResumeTimer(); ... }
+      CurrentUIPresenterState = SavedPreErrorState;
+  } else {
+      Led_Off(LOCK_LED);
+      CurrentUIPresenterState = UI_PRESENTER_STATE_STANDBY;
+  }
+  ```
+- **Verification:** bench-tested by user — B5/B6/B7 tests from the test plan. E0 (pot lift) from each realtime variant, pot replaced, screen returns to the same realtime variant. LOCK_LED behaves correctly across lock-engaged variants.
+- **Reproduction recipe for future Claude instances:** any time a new UI state is added that should survive an error round-trip, add it to BOTH `IsStateCooking()` (for E0 and auto-shutdown logic) AND the whitelist in `UIPresenter_HandleError()`'s NO_ERROR branch (for the restore path). Forgetting the latter causes silent STANDBY drops and stuck-LED symptoms. Also: states that toggle LOCK_LED in their render path should be self-healing on re-entry, but defensive `Led_Off(LOCK_LED)` calls in any path that exits a locked-implied state into STANDBY are cheap insurance.
+- **Status:** Verified
+
+## TIMR+/- on realtime jumped to TIME_SETTING_SCREEN (lost realtime view)
+- **Product:** G3
+- **Date:** 2026-06-04
+- **Branch:** Prescan (commit 25df579) + ported to CHK-Bring-Up (commit 0c26d7d)
+- **Files changed:** `ProductFeatures/UI/Inc/UIView.h`, `ProductFeatures/UI/Src/UIPresenter.c`, `ProductFeatures/UI/Src/UIView.c`
+- **Symptom:** pressing TIMR+ or TIMR− while on `INFO_REALTIME_TIMED` would exit the realtime view and transition to `TIME_SETTING_SCREEN`, which displays the power level alongside the timer (not the kWh value). User wanted the realtime view to stay on while editing the timer — only the timer digits should change, kWh should keep updating.
+- **Root cause / Purpose:** earlier-session implementation of TIMR+/- on the timed realtime screen used `RealtimeTimrPlusExit` / `RealtimeTimrMinusExit` helpers that transitioned `CurrentUIPresenterState` to `TIME_SETTING_SCREEN` and applied the increment in the model. That helper made sense for the "exit + apply" pattern PWR+/- uses, but didn't fit the user's actual expectation for TIMR+/- which is "stay in place + edit". The spec change request was confirmed during the A2 test from the bench-test plan.
+- **Final solution:** four-part change:
+  1. **In-place edit helpers** added to `UIPresenter.c`: `RealtimeTimerIncShort`, `RealtimeTimerIncLong`, `RealtimeTimerDecShort`, `RealtimeTimerDecLong`. Each calls the existing `UIModel_Increment/DecrementTimerSetting` (or the `*Fast` variant) AND sets a new module-level static `RealtimeTimerEditPending = true`, `RealtimeTimerEditCounter = REALTIME_TIMER_EDIT_TIMEOUT` (= 3 s). They do NOT change `CurrentUIPresenterState` — the realtime view stays on screen.
+  2. **Tick-driven commit** in `UIPresenter_Tick`: while in `INFO_REALTIME_TIMED` and `RealtimeTimerEditPending` is true, decrement `RealtimeTimerEditCounter` once per second. On reaching 0, clear the flag and either (a) if the staged timer value is 0:00, call `IndCooker_StopTimer()` + `UIModel_ResetTimerSetting()` and transition to `INFO_REALTIME` (untimed); or (b) transition to a new state `INFO_REALTIME_TIMED_ACCEPTANCE`.
+  3. **New acceptance state** `UI_PRESENTER_STATE_INFO_REALTIME_TIMED_ACCEPTANCE` added to the enum + state table. Uses a new view `UI_VIEW_DISPLAY_REALTIME_TIMED_FLASH`. Keys: PWR+/- short = apply (stay), TIMR+/- short/long = re-enter `INFO_REALTIME_TIMED` with the increment applied (cancels acceptance, like the existing TIMER_ACCEPTANCE → TIME_SETTING_SCREEN round-trip), ON/OFF = `HandleShutdownSequence`, LOCK inert, INFO = `ManageTransitionFromPowerUsageDisplay` (toggle off). State timeout (`TimeOutValue = 50` safety) action = `StartRealtimeTimerAfterAcceptance` which calls `SetInductionCookerTimerFromUIModel()` (commits the staged value to IndCooker) and returns to `INFO_REALTIME_TIMED`.
+  4. **New view function** `ShowRealtimeTimedFlash` in `UIView.c`: when `AcceptanceFlashVisible` is true (ON phase) renders the full timed-realtime layout via `ShowRealtimeTimedPower()`; when false (OFF phase) renders only the kWh value + dot + KWH icon via `RenderKwhFloat(Value, false, false)`. Result: only the timer digits flash; kWh stays solid throughout the acceptance window. New `UIView_Process` tick-case mirrors the existing `UI_VIEW_TIMER_ACCEPTANCE_FLASH` case (5x flash counter, calls `UIPresenter_ForceStateTimeout` on completion).
+  5. **Race protection:** `IsTimerActiveState()` now returns `false` for `INFO_REALTIME_TIMED[_LOCKED]` when `RealtimeTimerEditPending` is true — mirrors the protection `TIME_SETTING_SCREEN` already gets by being omitted from that helper. Without this, the OLD timer hitting zero during the 3-second edit window would trip `HandleTimerExpiry` and the user's edit would be lost. `RealtimeEngageLock` also clears the pending flag + counter on lock engagement so a stale edit doesn't survive a lock cycle.
+- **Verification:** bench-tested by user — A2 test from the test plan. TIMR+/- on the realtime screen now adjusts the timer in-place. After 3 s of no input, timer digits flash 5x while kWh stays solid; then IndCooker timer is updated and the screen returns to plain INFO_REALTIME_TIMED.
+- **Reproduction recipe for future Claude instances:** for any in-place editing UX on a view that has its own auto-refresh, the cleanest pattern is: separate the staged value (UIModel) from the committed value (IndCooker / SessionAggr / etc.); add a dirty flag + idle counter; commit via a separate state with a "looks the same but with an animation cue" view (here, just flashing the relevant digits). Watch out for races against the OLD value's expiry tick — guard `IsTimerActiveState()` / equivalent on the dirty flag.
+- **Status:** Verified
+
+## Auto-off warning bypassed child lock (LOCK_LED stuck on, lock silently dropped)
+- **Product:** G3
+- **Date:** 2026-06-04
+- **Branch:** Prescan (commit 25df579) + ported to CHK-Bring-Up (commit 0c26d7d)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c` (only `HandleAutoOff`'s warning-threshold branch)
+- **Symptom (predicted from analysis — flagged as likely-buggy in the F20 test of the test plan; bundled with B5/B6/B7 fix and bench-verified together):** sitting on any locked variant (`CHILD_LOCK`, `CHILD_LOCK_SHOW_POWER`, `INFO_REALTIME_LOCKED`, `INFO_REALTIME_TIMED_LOCKED`) until the 3 h 45 m auto-off warning fires would silently drop the lock — `HandleAutoOff` unconditionally forced `CurrentUIPresenterState = UI_PRESENTER_STATE_USER_COOKING_WITH_TIMER`. LOCK_LED stayed on because the lock-LED cleanup was never run; `SavedPreLockState` was stale.
+- **Root cause / Purpose:** `HandleAutoOff` was written before the realtime-locked variants existed, and never reconciled with the child-lock state machine. The warning-threshold branch simply set an auto-off timer (`IndCooker_SetTimer(remaining_15min)`) and forced `USER_COOKING_WITH_TIMER` so the user would see the auto-off timer counting down. No attempt to honour an active lock.
+- **Final solution:** detect if `CurrentUIPresenterState` is any of the four locked variants. If so, transition to `CHILD_LOCK_SHOW_POWER` (which renders timer + power level + LOCK_ICON, perfect for the auto-off warning UX) and set `SavedPreLockState = USER_COOKING_WITH_TIMER` so a later LOCK long-press unlock returns the user to the cooking screen with the auto-off timer still running. Also: clear any stale `RealtimeTimerEditPending` / `RealtimeTimerEditCounter` to keep `IsTimerActiveState` consistent.
+  ```c
+  bool IsLocked = (CurrentUIPresenterState == UI_PRESENTER_STATE_CHILD_LOCK ||
+                   CurrentUIPresenterState == UI_PRESENTER_STATE_CHILD_LOCK_SHOW_POWER ||
+                   CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_LOCKED ||
+                   CurrentUIPresenterState == UI_PRESENTER_STATE_INFO_REALTIME_TIMED_LOCKED);
+  if (IsLocked) {
+      SavedPreLockState = UI_PRESENTER_STATE_USER_COOKING_WITH_TIMER;
+      CurrentUIPresenterState = UI_PRESENTER_STATE_CHILD_LOCK_SHOW_POWER;
+  } else {
+      CurrentUIPresenterState = UI_PRESENTER_STATE_USER_COOKING_WITH_TIMER;
+  }
+  ```
+- **Verification:** bench-test recipe (requires shortened `AUTO_OFF_*_SECONDS` macros for feasibility): lock the cooker, wait for warning, expect screen to land on CHILD_LOCK_SHOW_POWER with the auto-off timer counting down — not on a bare USER_COOKING_WITH_TIMER with lock silently gone. Unlock via LOCK long-press returns to USER_COOKING_WITH_TIMER with the timer still running.
+- **Reproduction recipe for future Claude instances:** any path that unconditionally forces `CurrentUIPresenterState` (especially auto-recovery paths like `HandleAutoOff`, `HandleErrorShutdown`, `HandleTimerExpiry`) needs to be checked against the lock state machine. The pattern: "if currently locked, route into CHILD_LOCK_SHOW_POWER and update SavedPreLockState; otherwise, route to the non-locked target." The lock subsystem has no global override hook for "preserve lock through state changes" — it's manual at every transition site.
+- **Status:** Verified

@@ -3,6 +3,14 @@
 - Before generating a detailed answer, generate high-level answers first to ensure we are on the same page.
 - When troubleshooting, do not guess if you are not sure. Ask me to run a specific test to help gather enough data to solve the problem.
 
+# Before starting any non-trivial task
+
+If the project's memory directory contains `bugfixes.md` and/or `features.md`,
+scan them at the start of any non-trivial task — they hold historical context
+that may surface relevant prior bugs/decisions for the area you're touching.
+Focus on entries near the modules you'll be modifying. This is in addition to
+any per-project required reading (e.g. `codebase_summary.md`).
+
 # Memory Reminders
 
 After completing any of the following, ask: "Would you like me to save this to memory?"
