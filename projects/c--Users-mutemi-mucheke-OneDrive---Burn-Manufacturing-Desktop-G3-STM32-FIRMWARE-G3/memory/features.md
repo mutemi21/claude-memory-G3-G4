@@ -245,8 +245,8 @@ USER_COOKING_WITH_TIMER ──INFO──▶ INFO_REALTIME_TIMED (timer + blinkin
 ## Energy (kWh) accounting — end-to-end reference
 - **Product:** G3 (Highway and CHK; same accumulator code runs for both)
 - **Date:** 2026-06-04
-- **Branch:** Prescan (single-burner builds) + G3-HWY-4-Burner (4-burner lockstep build, commit b47a089)
-- **Files involved:** `ExternalPeripherals/InductionCooker/Src/CookingSession.c`, `ExternalPeripherals/InductionCooker/Src/CookerState.c`, `ExternalPeripherals/InductionCooker/Src/IndCooker.c`, `ExternalPeripherals/Flash/Src/SessionAggr.c`, `ProductFeatures/UI/Src/UIView.c`, `GlobalDefs/Inc/BurnerConfig.h`
+- **Branch:** Prescan (production single-burner). Section 11 covers an *experimental* 4-burner lockstep variant on `G3-HWY-4-Burner` (commit b47a089) — not production.
+- **Files involved:** `ExternalPeripherals/InductionCooker/Src/CookingSession.c`, `ExternalPeripherals/InductionCooker/Src/CookerState.c`, `ExternalPeripherals/InductionCooker/Src/IndCooker.c`, `ExternalPeripherals/Flash/Src/SessionAggr.c`, `ProductFeatures/UI/Src/UIView.c`. (`GlobalDefs/Inc/BurnerConfig.h` is experimental-branch-only.)
 - **Purpose:** Reference doc for how every kWh value in the firmware is computed, persisted, and rendered. Use this to trace a displayed kWh number back to its source variable, or to decide where to add a new feature that touches energy data. Captures the integrator + state pattern + display paths + 4-burner lockstep scaling in one place.
 
 ### 1. The single source of truth
@@ -268,7 +268,9 @@ int32_t timeDiff = UserRtc_CalcTimeDiffInSeconds(&CurrentSession.End, CurrentTim
 if (timeDiff < 1) return;            // (1) coalesce sub-second calls
 uint32_t watts = CookerModel_PowerToWatt(&CurrentSession.CurrentUserPowerSetting);
                                      // (or .ActualPower if USE_POWER_BOARD_MEASURED_POWER == 1)
-CurrentSession.AccumulatedPower += (watts * timeDiff * NUM_BURNERS_IN_LOCKSTEP);
+CurrentSession.AccumulatedPower += (watts * timeDiff);   // production: per-burner
+// experimental G3-HWY-4-Burner branch only:
+//   CurrentSession.AccumulatedPower += (watts * timeDiff * NUM_BURNERS_IN_LOCKSTEP);
 CurrentSession.End = *CurrentTime;
 ```
 
@@ -276,7 +278,7 @@ Key properties:
 - **`UserRtc_CalcTimeDiffInSeconds` has 1-second resolution** — sub-second calls return early without advancing `End`, so the integrator naturally steps at 1 Hz max even if upstream status frames arrive at 10 Hz.
 - **`USE_POWER_BOARD_MEASURED_POWER` is `0` in the build.** `watts` comes from a fixed power-level → wattage table (`CookerModel_PowerToWatt`), so the accumulator is intent-based, not a true measurement. Flip the macro to use real measurements from the power board.
 - **Rectangle rule integration.** Each interval contributes `watts × Δt`. If the user changes power mid-interval, `CookingSession_Update` updates `CurrentUserPowerSetting` first, so the *next* interval picks up the new wattage.
-- **`NUM_BURNERS_IN_LOCKSTEP` (from `GlobalDefs/Inc/BurnerConfig.h`)** scales the contribution. `1` for single-cooker builds, `4` for the industrial 4-burner lockstep build. Single source of truth — all downstream readers see the scaled value automatically.
+- **`NUM_BURNERS_IN_LOCKSTEP`** *(experimental — only present on the `G3-HWY-4-Burner` branch; not in production)*. When defined (in `GlobalDefs/Inc/BurnerConfig.h`) it scales the integrator contribution; the experimental branch sets it to `4`. Production builds don't include the header and the multiplier doesn't appear in the code. Mentioned here only because it lives at the single source of truth — see section 11.
 
 ### 3. Session lifecycle — the State pattern
 
@@ -360,7 +362,7 @@ When the cooker is powered off (user OFF press, E0 30-second auto-shutdown, volt
 | 4 | Daily and monthly aggregates (RTC-gated, currently `#if 0`'d but in the code) | `ShowDailyPowerUsage` / `ShowMonthlyPowerUsage` → `SessionAggr_GetDailyPowerUsage` / `GetMonthlyPowerUsage` | `SessionAggrFlashStoreRAMCpy.SessionAggrData.DailyPowerUsage` / `.MonthlyPowerUsage`, accumulated by `SessionAggr_UpdatePowerUsage` per session stop |
 | 5 | Cloud / MQTT reporting (`SessionSummary`, `MqttPayload`) | `SessionSummary_UpdateUsage(Session->CookerPower)` called from `AppendCookingSessionToFlash` | finalised `sessionData.CookerPower` from `GetCurrentCookingSession()` |
 
-All five trace back to `AccumulatedPower` directly or via SessionAggr populated by it. **The `NUM_BURNERS_IN_LOCKSTEP` scaling is applied once at `UpdateSessionPower` and every reader downstream sees the scaled value.** No double-multiplication, no conversion drift between paths.
+All five trace back to `AccumulatedPower` directly or via SessionAggr populated by it. There is exactly one writer (`UpdateSessionPower`) and every consumer reads from that writer's output, so any future scaling change (such as the experimental 4-burner multiplier in section 11) is applied once and propagated everywhere automatically — no double-multiplication, no conversion drift between paths.
 
 ### 9. Display formatting (`RenderKwhFloat` and `ShowSessionPower`)
 
@@ -398,15 +400,19 @@ Per-view re-render rates:
 - `INFO_REALTIME_TIMED_ACCEPTANCE` — every tick, driven by the 5× flash counter (`ACCEPTANCE_FLASH_ON_TICKS` = 8 ticks ON, `ACCEPTANCE_FLASH_OFF_TICKS` = 2 ticks OFF).
 - Post-shutdown `SHUTDOWN_SESSION_USAGE` and `INFO_LAST_SESSION_VALUE` — render once on entry, no per-tick refresh (the underlying value doesn't change while displayed).
 
-### 11. 4-burner lockstep details
+### 11. 4-burner lockstep details *(experimental — prototype branch only)*
 
-`NUM_BURNERS_IN_LOCKSTEP` (in `GlobalDefs/Inc/BurnerConfig.h`) is the deployment-time knob:
-- `1` → single-cooker Prescan / CHK-Bring-Up builds. Accumulator and display are per-board.
-- `4` → industrial 4-burner build (`G3-HWY-4-Burner` branch). Accumulator scales every contribution by 4; all five display paths show total appliance energy.
+> ⚠ **Experimental.** Lives on the `G3-HWY-4-Burner` prototype branch only. Not merged to Prescan, CHK-Bring-Up, or any production build. Treat as forward-looking design notes rather than stable feature reference. The production accumulator described in sections 1-10 has no multiplier — single-board accounting throughout.
+
+`NUM_BURNERS_IN_LOCKSTEP` (in `GlobalDefs/Inc/BurnerConfig.h`, prototype branch only) is the deployment-time knob. The branch sets it to `4` to support an industrial 4-burner appliance built from four standard 2 kW Highway power boards driven from a single MCU UART. The multiplier scales every accumulator contribution by 4; all five display paths then show total appliance energy.
 
 Topology assumption: MCU broadcasts TX to all 4 power boards; only the primary board's TX is wired back to MCU RX. The MCU has visibility into one board's state only, but trusts that all four are in lockstep because they receive the same commands.
 
-If lockstep is violated (one of the silent boards fails to heat — pot lifted, blown fuse, bad harness), the displayed kWh over-reports by 25-100% for that session. Out of scope for the prototype; a watchdog on primary-board UART silence is the next refinement.
+Known risks (why this stays experimental until bench-validated):
+- Silent failures on cookers 2-4 — no per-board feedback. A blown fuse / lifted pot / bad harness on any of those three is invisible to the firmware.
+- Displayed kWh over-reports by 25-100 % if lockstep is violated for any reason during a session.
+- Buzzer fires on all 4 boards simultaneously per UART command change.
+- A primary-board UART-silence watchdog is the next refinement; without it, a stuck primary plus three invisible heating burners is a hazardous failure mode.
 
 ### Reproduction recipe for future Claude instances
 
@@ -416,7 +422,7 @@ If lockstep is violated (one of the silent boards fails to heat — pot lifted, 
 - "Why does the post-cook kWh persist across reboots?" → `SessionAggr_UpdatePowerUsage` is called from `CookingSession_Stop` and writes to SPI flash; on boot `SessionAggr_Init` loads `LatestSessionData.CookerPower` from flash.
 - "Why is the kWh resetting to 0 mid-cook?" → almost certainly the side-channel `CookerState_Off` path firing (voltage fault via `IsCookerVoltageOK` or `PowerState != POWER_ON` in `PowerBoardStatusCb`) — `CookingSession_Stop` ran and cleared `CurrentSession`. Look at `IsCookerVoltageOK` and the upstream `CurrentErrorCode` to find which error tripped the cooker.
 - "How do I add a new kWh display somewhere?" → make it read from `CookingSession_GetCurrentSession` (for live mid-cook) or `SessionAggr_GetLatestSessionPowerUsage` (for finalised last-session). Don't try to recompute — there's exactly one accumulator.
-- "How do I scale for N burners?" → change `NUM_BURNERS_IN_LOCKSTEP` in `BurnerConfig.h`. Single source of truth.
+- "How do I scale for N burners?" *(experimental, prototype-branch path only)* → change `NUM_BURNERS_IN_LOCKSTEP` in `BurnerConfig.h` (defined only on the `G3-HWY-4-Burner` branch). Production branches don't include this header and the multiplier doesn't appear in the integrator. Single source of truth either way.
 
-- **Status:** Reference doc (no specific verification — describes existing behaviour). 4-burner scaling component bench-test pending.
+- **Status:** Reference doc — describes existing production behaviour. Section 11 (4-burner lockstep) is experimental on the `G3-HWY-4-Burner` prototype branch only; not bench-validated yet.
 
