@@ -242,3 +242,181 @@ USER_COOKING_WITH_TIMER ──INFO──▶ INFO_REALTIME_TIMED (timer + blinkin
 - **Verification:** Bench-tested on Prescan against the live cooker. Confirmed: STANDBY INFO short → "USED" then kWh; cooking INFO short → live kWh updating ~1 Hz; timed cooking INFO short → timer + kWh together with blinking colon; LOCK long on realtime → LOCK_ICON appears + screen persists + all other keys inert; LOCK long again → unlocks + still on realtime; INFO toggle and any non-LOCK key exit + apply normal action from unlocked realtime. Daily/monthly states confirmed unreachable (RTC limitation), STANDBY INFO short routes to LAST_SESSION instead.
 - **Status:** Verified
 
+## Energy (kWh) accounting — end-to-end reference
+- **Product:** G3 (Highway and CHK; same accumulator code runs for both)
+- **Date:** 2026-06-04
+- **Branch:** Prescan (single-burner builds) + G3-HWY-4-Burner (4-burner lockstep build, commit b47a089)
+- **Files involved:** `ExternalPeripherals/InductionCooker/Src/CookingSession.c`, `ExternalPeripherals/InductionCooker/Src/CookerState.c`, `ExternalPeripherals/InductionCooker/Src/IndCooker.c`, `ExternalPeripherals/Flash/Src/SessionAggr.c`, `ProductFeatures/UI/Src/UIView.c`, `GlobalDefs/Inc/BurnerConfig.h`
+- **Purpose:** Reference doc for how every kWh value in the firmware is computed, persisted, and rendered. Use this to trace a displayed kWh number back to its source variable, or to decide where to add a new feature that touches energy data. Captures the integrator + state pattern + display paths + 4-burner lockstep scaling in one place.
+
+### 1. The single source of truth
+
+All energy in the firmware lives in one place: the static `CookingSession_t CurrentSession` in `CookingSession.c`, specifically the field:
+
+```c
+uint32_t AccumulatedPower;   // watt-seconds (W·s)
+```
+
+`uint32_t` gives a headroom of ~1193 kWh — fine for any plausible session. Conversion to kWh happens at read time via `WattsToKWh()` which divides by 3600 (s/h) and 1000 (W/kW).
+
+### 2. The integrator
+
+`UpdateSessionPower()` in `CookingSession.c` is the only function that writes to `AccumulatedPower` (other than zero-init in `CookingSession_Start` / `Init`). The math:
+
+```c
+int32_t timeDiff = UserRtc_CalcTimeDiffInSeconds(&CurrentSession.End, CurrentTime);
+if (timeDiff < 1) return;            // (1) coalesce sub-second calls
+uint32_t watts = CookerModel_PowerToWatt(&CurrentSession.CurrentUserPowerSetting);
+                                     // (or .ActualPower if USE_POWER_BOARD_MEASURED_POWER == 1)
+CurrentSession.AccumulatedPower += (watts * timeDiff * NUM_BURNERS_IN_LOCKSTEP);
+CurrentSession.End = *CurrentTime;
+```
+
+Key properties:
+- **`UserRtc_CalcTimeDiffInSeconds` has 1-second resolution** — sub-second calls return early without advancing `End`, so the integrator naturally steps at 1 Hz max even if upstream status frames arrive at 10 Hz.
+- **`USE_POWER_BOARD_MEASURED_POWER` is `0` in the build.** `watts` comes from a fixed power-level → wattage table (`CookerModel_PowerToWatt`), so the accumulator is intent-based, not a true measurement. Flip the macro to use real measurements from the power board.
+- **Rectangle rule integration.** Each interval contributes `watts × Δt`. If the user changes power mid-interval, `CookingSession_Update` updates `CurrentUserPowerSetting` first, so the *next* interval picks up the new wattage.
+- **`NUM_BURNERS_IN_LOCKSTEP` (from `GlobalDefs/Inc/BurnerConfig.h`)** scales the contribution. `1` for single-cooker builds, `4` for the industrial 4-burner lockstep build. Single source of truth — all downstream readers see the scaled value automatically.
+
+### 3. Session lifecycle — the State pattern
+
+`CookerState.c` is a thin state machine with two states (`Off`, `On`), each holding three function pointers:
+
+| State | `StateActionOff` | `StateActionOn` | `StateActionTickTimeout` |
+|---|---|---|---|
+| `Off` | `NULL` | `StartSession` (transitions to On) | `NULL` |
+| `On` | `StopSession` (transitions to Off) | `UpdateSession` (integrates) | `BackupSession` (writes to RTC backup) |
+
+Dispatch is via `CookerState_Off()` / `CookerState_On()` / `CookerState_BackupTimeout()`. Each forwards to the current state's pointer. So calling `CookerState_On()` does different things depending on state:
+- While Off → `StartSession` zeroes the accumulator, sets isActive=true, captures Start/End, transitions to On.
+- While On → `UpdateSession` runs the integrator (one tick of the rectangle rule).
+
+`Start` / `Update` / `Stop` / `Backup` wrappers in `CookerState.c` fetch `Now` via `UserRtc_GetRtcTime` and forward to the matching `CookingSession_*` function.
+
+### 4. What drives the lifecycle
+
+The state transitions all come from one upstream source: `PowerBoardStatusCb` in `IndCooker.c`. Triggered on every UART status frame from the (primary) power board (~10 Hz Highway, ~9 Hz CHK):
+
+```c
+if (!IsVoltageOk || PowerState != COOKER_POWER_STATE_POWER_ON) {
+    CookerState_Off();                       // session ends via this path
+} else if (PotPresence == COOKER_POT_PRESENCE_ABSENT) {
+    SessionPaused = true;                    // skip frame entirely
+} else {
+    if (SessionPaused) {
+        CookingSession_ResumeFromPause(&Now);
+        SessionPaused = false;
+    }
+    CookerState_On(&PowerLevel, &CurrentActualPower);   // → StartSession (first time) or UpdateSession (every time after)
+}
+```
+
+The `timeDiff < 1` guard inside `UpdateSessionPower` is what reconciles the ~10 Hz status-frame rate with the 1 Hz accumulator step rate.
+
+`BackupSession` (the third state action) is wired through `CookerState_BackupTimeout()` from a slower periodic timer — its purpose is to snapshot `AccumulatedPower` to the STM32's RTC backup registers periodically for crash recovery.
+
+### 5. Pause semantics (pot lift)
+
+When the user lifts the pot mid-cook, `PowerBoardStatusCb` sees `PotPresence == ABSENT` and skips the entire body — no `CookerState_On()` call, no `UpdateSession`, accumulator pauses naturally. The user-facing E0 error is raised separately via `PowerBoardErrorCb` → `UIPresenter_HandleError`.
+
+When the pot returns, `CookingSession_ResumeFromPause(&Now)` runs:
+
+```c
+void CookingSession_ResumeFromPause(const TIME_T* CurrentTime) {
+    if (!CurrentSession.isActive) return;
+    CurrentSession.End = *CurrentTime;    // realign End to now, discard the paused interval
+}
+```
+
+Without this realignment, the next `UpdateSessionPower` would compute `timeDiff = (long pause duration)` and credit the entire pause as cooking energy. Resetting `End` to the resume timestamp throws away the paused interval cleanly.
+
+### 6. Stop and persistence
+
+When the cooker is powered off (user OFF press, E0 30-second auto-shutdown, voltage fault, any path that calls `CookerState_Off()`), `StopSession` → `CookingSession_Stop()` runs the canonical finalisation:
+
+1. One last `CookingSession_Update` to flush the final interval into the accumulator.
+2. `GetCurrentCookingSession()` builds a `CookerSessionData_t` with `.CookerPower = WattsToKWh(AccumulatedPower)` (the ×NUM_BURNERS_IN_LOCKSTEP scaling is baked into AccumulatedPower already).
+3. If non-zero:
+   - `FlashData_SessionDataBufferAppend` — circular session log on SPI flash.
+   - `AppendCookingSessionToFlash` — duplicate entry + `SessionSummary_UpdateUsage` for cloud reporting.
+   - `SessionAggr_UpdatePowerUsage(sessionData.CookerPower, sessionData.Time0)` — **this is the key call** for the post-session UI. Writes the kWh into `SessionAggrFlashStoreRAMCpy.SessionAggrData.LatestSessionData.CookerPower` and persists to flash. Also accumulates daily/monthly totals (RTC-gated).
+4. `CurrentSession` is zeroed; `isActive = false`. The live integrator stops.
+5. RTC backup is cleared.
+
+### 7. Crash recovery via RTC backup
+
+`BackupSession` (called periodically while On from `CookerState_BackupTimeout`) writes `{Start, End, kWh}` to the STM32's RTC backup registers via `RtcBackup_Write`. On boot, `CookingSession_Init` reads it; if `Backup.Power != 0`:
+- Logs the lost session as a historical entry in `FlashData_SessionDataBufferAppend`.
+- Updates `SessionAggr` via `SessionAggr_UpdatePowerUsage` so the post-cycle "last session" display shows it.
+- Does **not** resume the live session. `CurrentSession.isActive = 0` after init. Cooker boots to STANDBY cleanly. The "missing" energy from the crash is preserved as the most recent session.
+
+### 8. The five display paths — all read from the single source
+
+| # | Where it shows up | Read path | Source variable |
+|---|---|---|---|
+| 1 | Realtime view (mid-cook): `INFO_REALTIME[_TIMED]` and locked variants | `ShowRealtimePower` / `ShowRealtimeTimedPower` → `CookingSession_GetCurrentSession(&Session)` → `Session.CookerPower` | live `CurrentSession.AccumulatedPower` |
+| 2 | Post-cook "USED" → final-kWh shutdown sequence (`SHUTDOWN_USED_LABEL` → `SHUTDOWN_SESSION_USAGE`) | `ShowSessionPower` → `SessionAggr_GetLatestSessionPowerUsage` | `SessionAggrFlashStoreRAMCpy.SessionAggrData.LatestSessionData.CookerPower` (RAM mirror of flash, set in step 6.3) |
+| 3 | STANDBY → INFO short-press "last session" screen (currently routed via `INFO_LAST_SESSION_*` because the RTC isn't populated; will become daily/monthly via the disabled `INFO_DAILY_*` / `INFO_MONTHLY_*` states once RTC arrives) | `ShowSessionPower` → `SessionAggr_GetLatestSessionPowerUsage` (same as #2) | same as #2 |
+| 4 | Daily and monthly aggregates (RTC-gated, currently `#if 0`'d but in the code) | `ShowDailyPowerUsage` / `ShowMonthlyPowerUsage` → `SessionAggr_GetDailyPowerUsage` / `GetMonthlyPowerUsage` | `SessionAggrFlashStoreRAMCpy.SessionAggrData.DailyPowerUsage` / `.MonthlyPowerUsage`, accumulated by `SessionAggr_UpdatePowerUsage` per session stop |
+| 5 | Cloud / MQTT reporting (`SessionSummary`, `MqttPayload`) | `SessionSummary_UpdateUsage(Session->CookerPower)` called from `AppendCookingSessionToFlash` | finalised `sessionData.CookerPower` from `GetCurrentCookingSession()` |
+
+All five trace back to `AccumulatedPower` directly or via SessionAggr populated by it. **The `NUM_BURNERS_IN_LOCKSTEP` scaling is applied once at `UpdateSessionPower` and every reader downstream sees the scaled value.** No double-multiplication, no conversion drift between paths.
+
+### 9. Display formatting (`RenderKwhFloat` and `ShowSessionPower`)
+
+Both renderers convert a `float` kWh to a 4-digit display string with 2-decimal precision, capping at 99.99 kWh:
+
+```c
+uint16_t Hundredths = (uint16_t)ceilf(Value * 100.0f);
+if (Hundredths > 9999) Hundredths = 9999;
+uint8_t Tens=(.../1000)%10, Ones=(.../100)%10, Tenths=(.../10)%10, Hundths=...%10;
+char ValueStr[8];
+if (Tens == 0) snprintf(ValueStr, 8, "    %d%d%d", Ones, Tenths, Hundths);    // " X.XX"
+else           snprintf(ValueStr, 8, "   %d%d%d%d", Tens, Ones, Tenths, Hundths);  // "XX.XX"
+```
+
+The decimal point is NOT in the string; it's overlaid as a separate display segment via `Display_GetDotData()` (fixed position between display digits 5 and 6 on the VK16K33). With 4-burner scaling enabled and the cap at 99.99 kWh, a sustained max-power session would lock the display at "99.99" after ~12.5 hours at 8 kW — operationally unreachable.
+
+Icons overlaid on the buffer:
+- `KWH_ICON` always.
+- `MONTH_ICON` only on monthly view (`RenderKwhFloat`'s `IncludeMonthIcon` parameter).
+- `LOCK_ICON` overlaid on realtime views when `UIPresenter_IsRealtimeLocked()` returns true.
+
+### 10. Refresh cadences
+
+Three independent rates govern the visible cadence of the kWh display:
+
+| Layer | Rate | Mechanism |
+|---|---|---|
+| Power-board status frames | ~10 Hz (Highway) / ~9 Hz (CHK) | UART RX, driver-driven |
+| `AccumulatedPower` increments | **~1 Hz** | `timeDiff < 1` early-return in `UpdateSessionPower` |
+| View re-render | varies by view | `UIView_Process` tick handler |
+
+Per-view re-render rates:
+- `INFO_REALTIME` (untimed) — 1 Hz, via a static counter in the case (10 ticks of the 100 ms UI tick).
+- `INFO_REALTIME_TIMED` and `INFO_REALTIME_TIMED_LOCKED` — every tick (100 ms), so the blinking colon can toggle visibly. kWh digits stay stable between integrator updates because the underlying value only changes at 1 Hz.
+- `INFO_REALTIME_TIMED_ACCEPTANCE` — every tick, driven by the 5× flash counter (`ACCEPTANCE_FLASH_ON_TICKS` = 8 ticks ON, `ACCEPTANCE_FLASH_OFF_TICKS` = 2 ticks OFF).
+- Post-shutdown `SHUTDOWN_SESSION_USAGE` and `INFO_LAST_SESSION_VALUE` — render once on entry, no per-tick refresh (the underlying value doesn't change while displayed).
+
+### 11. 4-burner lockstep details
+
+`NUM_BURNERS_IN_LOCKSTEP` (in `GlobalDefs/Inc/BurnerConfig.h`) is the deployment-time knob:
+- `1` → single-cooker Prescan / CHK-Bring-Up builds. Accumulator and display are per-board.
+- `4` → industrial 4-burner build (`G3-HWY-4-Burner` branch). Accumulator scales every contribution by 4; all five display paths show total appliance energy.
+
+Topology assumption: MCU broadcasts TX to all 4 power boards; only the primary board's TX is wired back to MCU RX. The MCU has visibility into one board's state only, but trusts that all four are in lockstep because they receive the same commands.
+
+If lockstep is violated (one of the silent boards fails to heat — pot lifted, blown fuse, bad harness), the displayed kWh over-reports by 25-100% for that session. Out of scope for the prototype; a watchdog on primary-board UART silence is the next refinement.
+
+### Reproduction recipe for future Claude instances
+
+- "Where is kWh accumulated?" → `CookingSession.c::UpdateSessionPower`, one write to `AccumulatedPower`.
+- "Where is it converted to kWh?" → `WattsToKWh()` divides W·s by 3600 × 1000. Conversion happens at read time via `GetCurrentCookingSession()`.
+- "Why does the realtime display only change once per second?" → `timeDiff < 1` guard in `UpdateSessionPower`. The integrator is bounded by the RTC's 1-second resolution.
+- "Why does the post-cook kWh persist across reboots?" → `SessionAggr_UpdatePowerUsage` is called from `CookingSession_Stop` and writes to SPI flash; on boot `SessionAggr_Init` loads `LatestSessionData.CookerPower` from flash.
+- "Why is the kWh resetting to 0 mid-cook?" → almost certainly the side-channel `CookerState_Off` path firing (voltage fault via `IsCookerVoltageOK` or `PowerState != POWER_ON` in `PowerBoardStatusCb`) — `CookingSession_Stop` ran and cleared `CurrentSession`. Look at `IsCookerVoltageOK` and the upstream `CurrentErrorCode` to find which error tripped the cooker.
+- "How do I add a new kWh display somewhere?" → make it read from `CookingSession_GetCurrentSession` (for live mid-cook) or `SessionAggr_GetLatestSessionPowerUsage` (for finalised last-session). Don't try to recompute — there's exactly one accumulator.
+- "How do I scale for N burners?" → change `NUM_BURNERS_IN_LOCKSTEP` in `BurnerConfig.h`. Single source of truth.
+
+- **Status:** Reference doc (no specific verification — describes existing behaviour). 4-burner scaling component bench-test pending.
+
