@@ -426,3 +426,44 @@ Known risks (why this stays experimental until bench-validated):
 
 - **Status:** Reference doc — describes existing production behaviour. Section 11 (4-burner lockstep) is experimental on the `G3-HWY-4-Burner` prototype branch only; not bench-validated yet.
 
+
+## G3 R2 → R3 hardware revision support
+- **Product:** G3 (R3 hardware revision)
+- **Date:** 2026-06-10
+- **Branch:** R3
+- **Files changed:** `STM32_FIRMWARE_G3.ioc`, `Core/Inc/main.h`, `Core/Src/main.c`, `Core/Src/gpio.c`, `Core/Src/rtc.c`, `Core/Src/stm32g0xx_it.c`, `Core/Src/usart.c`, `Core/Startup/startup_stm32g0b0cetx.s` (new), `STM32G0B0CETX_FLASH.ld` (new), `Drivers/STM32G0xx_HAL_Driver/*` (regenerated for G0B0), `ExternalPeripherals/RFComms/BTModemDriver/Src/ModemHw.c`, `ExternalPeripherals/Led/Inc/Led.h`, `ExternalPeripherals/Led/Src/Led.c`, `cmake/stm32cubemx/CMakeLists.txt`. Reference doc: `R2_TO_R3_CHANGES.md` in project root; MCU-swap mechanics in `MIGRATION_GUIDE.md`.
+- **Purpose:** Bring the G3 firmware up on the R3 board revision. R3 changes the MCU (G071 → G0B0), flips BT module power polarity, adds a touch-driver LDO, and dual-colors the PAY LED. Five firmware deltas to make R3 work, plus one bugfix that fell out of bring-up.
+
+### Hardware deltas R2 → R3
+1. **MCU swap:** STM32G071CBT6 (128K Flash, 36K RAM, RTC on LSI) → STM32G0B0CETx (512K Flash, 144K RAM, RTC on LSE 32.768 kHz crystal). Pinout LQFP-48 compatible.
+2. **BT_PWR_SW polarity flip (PB1):** R2 P-FET active-LOW gate (LOW = BT ON) → R3 LP5907MFX-3.3 LDO (U204) active-HIGH EN (HIGH = BT ON). Firmware now writes RESET=OFF, SET=ON for BT_PWR_SW.
+3. **Touch driver LDO (NEW, U205 LP5907MFX-3.3):** PA9 (`TOUCH_PWR_SW`) active-HIGH EN drives +3V3_Touch rail, powering XW12A cap-touch ICs U500/U501. Requires 100 ms settle delay before I2C2 access.
+4. **PAY LED dual-color:** R2 single yellow on PA12 → R3 TZ-LAMP03RG4HD-A with green on PA11 + red on PA12 (both N-FET low-side drive, active-HIGH at MCU).
+5. **USART IRQ vector layout:** G0B0 combines `USART3_4_5_6_IRQHandler` (vs G071's `USART3_4_IRQHandler`). USART2 still has its own dedicated `USART2_IRQHandler`.
+
+### Firmware changes for R3
+- **MCU migration:** new startup file, linker script, HAL drivers, CMSIS headers, `STM32G0B0xx` build define. CubeMX regeneration with "Keep User Code" + "Delete Previous" required. See `MIGRATION_GUIDE.md`.
+- **LSE crystal:** `__HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW)` + `LSEState = RCC_LSE_ON` in `SystemClock_Config()`. `RTCClockSelection = RCC_RTCCLKSOURCE_LSE` in `HAL_RTC_MspInit()`.
+- **BT_PWR_SW polarity:** all writes flipped — `main.c` USER CODE BEGIN 2 boot-safety pin write is `GPIO_PIN_RESET` (BT off until Step 5); `ModemHw_PowerOn` writes SET; `ModemHw_PowerOff` writes RESET.
+- **Touch LDO enable:** `HAL_GPIO_WritePin(TOUCH_PWR_SW_*, GPIO_PIN_SET)` + `HAL_Delay(100)` in `main.c` USER CODE BEGIN 2, before any I2C2 traffic.
+- **PAY LED dual-color:** `main.h` splits into `GREEN_LED_CTL_PAY` (PA11) + `RED_LED_CTL_PAY` (PA12); `gpio.c` adds PA11 to the GPIOA output bitmask; `Led.h` splits `PAY_LED` enum into `RED_PAY_LED` + `GREEN_PAY_LED`; `Led.c` adds per-color switch cases everywhere. `INFO_PAY_LED` enum renamed to `INFO_LED` to disambiguate.
+- **USART IRQ dispatch:** `stm32g0xx_it.c` `USART3_4_5_6_IRQHandler` USER CODE block calls `PowerBoardUart_IrqHandler()` + `DebugUart_IrqHandler()` (replaces the `USART3_4_IRQHandler` from G071).
+
+### Bug found during R3 bring-up (also affects future hardware revisions with floating UART RX)
+- **USART RX ORE storm in `BleUartInit` on cold reboot.** Floating PA3 (BT unpowered on R3) latched ORE between MX_USART2_UART_Init and BleUartInit. BleUartInit's enable of RXNEIE triggered an unhandled IRQ storm that starved USART4 TX, truncating boot logs at `[Flash] C`. Fix: clear `USARTx->ICR` error flags + drain RDR before enabling RXNEIE, in all three UART init functions (BleUartInit/PowerBoardUart_Init/DebugUart_Init); defensive ICR clear in all three IRQ handlers. Full investigation in `bugfixes.md` "R3 cold-reboot hang truncated at '[Flash] C'".
+
+### Production hardware test harness (boot-time Steps 0–6)
+| Step | Test                                           | Validates                              |
+|------|------------------------------------------------|----------------------------------------|
+| 0    | Control-board buzzer (3 beeps, 1s on/off)      | PD3 + 2N7002, unchanged from R2        |
+| 1    | RTC set + 5s wait + read-back                  | LSE crystal (NEW on R3)                |
+| 2    | All LEDs + 7-seg segments on (5s visual)       | Dual PAY LED wiring + display          |
+| 3    | Keypad feedback (press each key once)          | Touch LDO + I2C2 + cap-touch ICs       |
+| 4    | Power down LEDs/display                        | Current-budget prep for Step 5         |
+| 5    | BT bring-up (BTStateMachine_TurnOn)            | BT_PWR_SW polarity + AT init           |
+| 6    | BLE LOCK/UNLOCK prompt (nRF Connect, char 0xFFF2) | End-to-end BT comms                  |
+
+### Pending items
+- BT_PWR_SW polarity is hard-coded for R3. If a unified build needs to support both R2 and R3 in the field, this needs a hardware-revision compile flag.
+- Stage A/B debug-bisection scaffolding (`STAGE_A_FLASH_ONLY` + `STAGE_B_*` macros in `main.c`) left in-tree dormant; useful for future peripheral-interaction debugging.
+- ORE-storm bugfix should be backported to the G4 unified-firmware USART init/IRQ handlers if any of their RX lines can float in a similar topology.
