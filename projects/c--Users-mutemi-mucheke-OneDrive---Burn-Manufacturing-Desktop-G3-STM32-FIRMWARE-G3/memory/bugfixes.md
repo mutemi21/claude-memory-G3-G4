@@ -393,3 +393,43 @@
 - **Verification:** bench-test recipe (requires shortened `AUTO_OFF_*_SECONDS` macros for feasibility): lock the cooker, wait for warning, expect screen to land on CHILD_LOCK_SHOW_POWER with the auto-off timer counting down — not on a bare USER_COOKING_WITH_TIMER with lock silently gone. Unlock via LOCK long-press returns to USER_COOKING_WITH_TIMER with the timer still running.
 - **Reproduction recipe for future Claude instances:** any path that unconditionally forces `CurrentUIPresenterState` (especially auto-recovery paths like `HandleAutoOff`, `HandleErrorShutdown`, `HandleTimerExpiry`) needs to be checked against the lock state machine. The pattern: "if currently locked, route into CHILD_LOCK_SHOW_POWER and update SavedPreLockState; otherwise, route to the non-locked target." The lock subsystem has no global override hook for "preserve lock through state changes" — it's manual at every transition site.
 - **Status:** Verified
+
+## R3 cold-reboot hang truncated at "[Flash] C" — USART2 RX ORE storm starves UART4 TX
+- **Product:** G3 (R3 hardware revision; latent in R2 firmware too but masked by R2 having BT module powered during boot)
+- **Date:** 2026-06-10
+- **Branch:** R3
+- **Files changed:** `Core/Src/usart.c` (BleUartInit, BleUartIrqHandler, PowerBoardUart_Init, PowerBoardUart_IrqHandler, DebugUart_Init, DebugUart_IrqHandler)
+- **Root cause / Purpose:** On R3 cold reboots, the debug log printed up to "[Flash] C" (the start of "[Flash] Capacity: %d KB") and then stopped forever. First boot worked end-to-end; subsequent cold boots truncated. Trigger turned out to be the BT_PWR_SW polarity flip in the R3 hardware: R2 used a P-FET active-LOW gate (firmware LOW = BT ON), R3 uses an LP5907 LDO with active-HIGH EN (firmware LOW = BT OFF). The firmware drives BT_PWR_SW LOW during boot on both rev's, so on R3 the BT module is unpowered during init while on R2 it was powered. With the BT module unpowered, PA3 (USART2 RX) floats and picks up capacitive-coupling noise. Sequence on R3:
+  1. `MX_USART2_UART_Init()` enables USART2 but not RXNEIE — IRQ off, peripheral receiving.
+  2. Floating PA3 noise produces a garbage byte. RDR holds it. RXNE flag sets. No one reads RDR (RXNEIE off).
+  3. A second noise byte arrives. ORE (overrun) flag latches.
+  4. `BleUartInit()` later sets `USART2->CR1 |= USART_CR1_RXNEIE_RXFNEIE`. USART2 IRQ fires immediately because BOTH RXNE and ORE trigger the IRQ when RXNEIE is set.
+  5. `BleUartIrqHandler` reads RDR (clears RXNE only — not ORE), returns.
+  6. ORE still set → IRQ fires again. Infinite loop in USART2_IRQHandler (vector 28).
+  7. USART4 TX ISR shares NVIC priority level 0, lives on USART3_4_5_6_IRQn (vector 29). At equal priority the lower IRQ number wins, so USART4 TX never runs.
+  8. UART4 FIFO bytes that W25qxx_Init had already queued (the tail of "Capacity:" and "PASS") never transmit. Visible cut-off "[Flash] C" is just the byte stream already on the wire when the storm started.
+
+  R2 didn't show this because R2 BT_PWR_SW LOW = BT powered, so PA3 was actively driven by the BT module's TX idle-HIGH — no floating, no noise, no ORE.
+- **What we tried that didn't work:**
+  - Initially suspected LSE crystal startup (new on R3, R2 used LSI), touch LDO inrush, and bulk-cap discharge timing — all plausible R3-specific deltas but none reproduced when isolated.
+  - 7 stages of forward bisection (Stage A flash-only + B-1..B-7 re-adding peripherals one cluster at a time) all passed because none of them called `BleUartInit` before `W25qxx_Init`. Bisection misled us into thinking the pre-W25qxx_Init path was guilty.
+  - B-8/B-9/B-10 falsely reported pass because the operator was using `[Flash] PASS` as the pass criterion — that line prints inside `W25qxx_Init`, BEFORE `BleUartInit`, so the apparent success was the wrong checkpoint. Sentinel prints `[FixCheck] BleUartInit returned ...` and `[FixCheck] PASS -- reached idle loop ...` finally made the hang visible.
+- **Final solution:** In `Core/Src/usart.c`, apply the same two-part fix to all three UART pairs (USART2/Ble, USART3/PwrBoard, USART4/Debug):
+  1. In each `*_Init` function, BEFORE setting `CR1 |= USART_CR1_RXNEIE_RXFNEIE`:
+     ```c
+     USARTx->ICR = USART_ICR_PECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_ORECF;
+     (void)USARTx->RDR;
+     ```
+     This clears any latched RX error flags and drains a possibly-pending byte so the very first IRQ doesn't fire on stale state.
+  2. At the top of each `*_IrqHandler`, defensively clear errors if seen:
+     ```c
+     if (Sr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
+         USARTx->ICR = USART_ICR_PECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_ORECF;
+     }
+     ```
+     This protects against a stray error mid-runtime (e.g. cable disconnect, brown-out glitch) that would otherwise loop the handler.
+
+  USART2 (Ble, PA3) and USART3 (PowerBoard, PB11) both float during R3 bring-up. USART4 (Debug) is driven by the USB-UART cable so the fix there is belt-and-braces.
+- **Verification:** Stage B-8 binary (minimal main with `BleUartInit()` called after `W25qxx_Init()`): 10 cold reboots, all 10 printed both `[FixCheck] BleUartInit returned -- ORE fix works for USART2.` and `[FixCheck] PASS -- reached idle loop without hanging.` Then `STAGE_A_FLASH_ONLY=0` (full firmware): operator confirmed cold reboots no longer truncate at `[Flash] C` and the firmware reaches the LOCK/UNLOCK step end-to-end on every boot.
+- **Reproduction recipe for future Claude instances:** if firmware that worked on R-N starts truncating UART output on R-(N+1), check whether any peripheral whose RX line was actively driven on R-N is now floating on R-(N+1) (look for power-rail / load-switch / LDO polarity differences). When an RX line floats and the matching peripheral is enabled (UART running) but its RXNEIE is OFF, ORE can latch silently before the IRQ is enabled. The instant something later enables RXNEIE, the IRQ storms. Always clear `ICR` error bits + drain `RDR` immediately before flipping RXNEIE on, and defensively clear `ICR` errors in the IRQ handler too.
+- **Status:** Verified
