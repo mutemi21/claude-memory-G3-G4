@@ -467,3 +467,45 @@ Known risks (why this stays experimental until bench-validated):
 - BT_PWR_SW polarity is hard-coded for R3. If a unified build needs to support both R2 and R3 in the field, this needs a hardware-revision compile flag.
 - Stage A/B debug-bisection scaffolding (`STAGE_A_FLASH_ONLY` + `STAGE_B_*` macros in `main.c`) left in-tree dormant; useful for future peripheral-interaction debugging.
 - ORE-storm bugfix should be backported to the G4 unified-firmware USART init/IRQ handlers if any of their RX lines can float in a similar topology.
+
+## Usage Feature port: Prescan → Develop
+- **Product:** G3 (Develop branch family — applies to Highway and CHK drivers equally; same accumulator code runs for both)
+- **Date:** 2026-06-09 to 2026-06-10
+- **Branch:** Usage-Feature, off Develop HEAD `ddb049f`, rebased onto `8465389`. Two commits ahead of `origin/Develop` after rebase: `005ae3e` (Phase C — pause across pot-lift) and `726f63a` (Phase D — INFO button).
+- **Files changed:** `ExternalPeripherals/InductionCooker/Inc/CookingSession.h`, `Src/CookingSession.c`, `Src/IndCooker.c` (Phase C); `ProductFeatures/UI/Inc/UIPresenter.h`, `Inc/UIView.h`, `Src/UIPresenter.c`, `Src/UIView.c` (Phase D).
+- **Purpose:** Re-implement the Usage Feature on the `Develop` branch using `UsageFeaturePort.md` as the spec. The spec was written assuming all 12 source commits from Prescan would need re-applying; in practice only 2 phases (≈ 60 % of the line count) were genuinely new work on Develop. This entry documents what was actually needed, what was already there, and the Develop-specific traps. See the Prescan port entry above ("Info button — realtime current-session + last-session usage screens", 2026-05-14) for the feature behaviour itself.
+
+### What was already on Develop (do not re-port)
+Bench-verified A1–A3 and B1–B3 against the pre-port build (commit `ddb049f`) before writing any code. Both phases passed end-to-end without any changes:
+
+- **Phase A — Locked-timer integrity** (3 source commits `3d69214` / `0a4fdcd` / `bc3a8d3`): present in `UIView.c` (`Led_On/Off(LOCK_LED)` calls embedded in every locked-variant render function; colon-blink in `UI_VIEW_DISPLAY_CHILD_LOCK` / `_POWER_WITH_LOCK` tick cases) and in `UIPresenter.c` (`PendingLockActivation`, `QueueLockActivation`, `LockDisplayCycleCounter`, `UIPresenter_IsLockPending`, `UIPresenter_IsLockPhaseLoc`, `LOCK_PHASE_LOC_SECONDS`, `LOCK_PHASE_CYCLE_SECONDS`; LOCK long-press bound on `TIME_SETTING_SCREEN` and `TIMER_ACCEPTANCE`).
+- **Phase B — End-of-session UX + E0 auto-shutdown** (4 source commits `eac762f` / `a70a5aa` / `5f37234` / `bf54aec`): present as `IsStateCooking(UIPresenterStateID_e State)` parameterised helper, `HandleErrorShutdown` routing via `IsStateCooking(SavedPreErrorState)` → `HandleShutdownSequence`, `ErrorAutoShutdownCounter` ticking in `UIPresenter_Tick`, `ERROR_AUTO_SHUTDOWN_SECONDS = 30`, and PWR+/- already bound on `TIME_SETTING_SCREEN` and `TIMER_ACCEPTANCE` in the state table.
+
+If a similar port is ever attempted to another long-lived branch, run the bench tests against the pre-port head **first** — the spec lists 22 tests across 4 phases, and any subset that already passes is wasted re-port effort.
+
+### What was new work (Phases C and D)
+- **Phase C — Pause-not-end on pot lift** — `CookingSession_ResumeFromPause(const TIME_T*)` prototype + 4-line body in `CookingSession.{h,c}`; restructured `PowerBoardStatusCb` in `IndCooker.c` with a static `SessionPaused` bool and the pause branch. **Critical Develop-specific adjustment** — exclude `COOKER_ERROR_NO_POT_ERROR` from the `ErrorBlocking` check at the call site (see "Phase C pot-lift pause naive port terminated the session on first lift" entry in `bugfixes.md` for the callback-ordering rationale). Develop's voltage-fault zero-power routing (E1/E2 → `CookerState_On` with `COOKER_POWER_NO_POWER` instead of `CookerState_Off`) is preserved.
+- **Phase D — INFO button** — 7 new active presenter states + 4 dormant daily/monthly states (`#if 0` with `TODO(RTC)`), 3 new active views + 2 dormant. New helpers: `RealtimePwrPlusExit/MinusExit`, `RealtimeTimerIncShort/Long/DecShort/Long`, `RealtimeEngageLock`, `RealtimeDisengageLock`, `StartRealtimeTimerAfterAcceptance`, plus public `UIPresenter_IsRealtimeLocked` getter. View-side: new `RenderKwhFloat(value, includeMonthIcon, includeLockIcon)` shared helper (ShowSessionPower refactored to use it; ShowDailyPowerUsage/ShowMonthlyPowerUsage left alone — they use `Display_ShowFloat` directly, refactoring them is not in scope). Extended `IsStateCooking`, `IsTimerActiveState` (unconditional for `_TIMED[_LOCKED]` per fb9c6e8's rationale, gated on `!RealtimeTimerEditPending`), `HandleTimerExpiry` (LOCK_LED cleanup for locked realtime variants), `UIPresenter_HandleError` (whitelist + defensive `Led_Off(LOCK_LED)` in the STANDBY fallback), `HandleAutoOff` (lock-detection branch). Tick-driven edit-counter commit logic in `UIPresenter_Tick`.
+
+### Rebase outcome (onto `8465389`, the RTC drift workaround merge)
+Two textual conflicts during Phase C replay, both at the same insertion point in `CookingSession.{h,c}` — the upstream RTC fix added `bool CookingSession_IsActive(void)` immediately after `CookingSession_GetCurrentSession`, exactly where Phase C added `CookingSession_ResumeFromPause`. Resolution: keep both functions side-by-side. The two functions don't interact — `CookingSession_IsActive` is a read-only getter, `CookingSession_ResumeFromPause` realigns `CurrentSession.End`. The drift-corrected `UserRtc_GetRtcTime` only makes the pause realignment more accurate. Phase D replayed cleanly with zero conflicts.
+
+### FLASH footprint
+- Before port (`ddb049f` build): 97.05 % of 128 KB (≈ 124.2 KB / 130 016 B)
+- After Phase C: 97.07 %
+- After Phase D: 99.16 %
+- After rebase (includes RTC drift workaround): **99.39 %** (130 272 B / 131 072 B)
+
+Roughly 800 bytes of headroom on the G071 build. Future material additions to this branch family will need either size optimisation or the R3 MCU bump (G0B0 has 512 KB Flash — see the R3 features.md entry from 2026-06-10). The 4 dormant daily/monthly states / 2 dormant views are `#if 0`'d and contribute zero bytes; re-enabling them when the RTC arrives will cost a few hundred bytes more.
+
+### Acceptance verdict
+All 14 bench tests in `UsageFeaturePort.md` §6 passed: A1–A3, B1–B3, C1–C3, D1–D8. C2 initially failed on the naive port — see the dedicated bugfix entry. C2 retest passed after the `NO_POT_ERROR` exclusion fix was folded into the Phase C commit (squashed before the rebase). All other tests passed on first run.
+
+### Guidance for future ports of this feature
+1. **Cherry-pick is non-viable across diverged branches.** The Develop port took ≈ 1 day of focused work; a cherry-pick attempt against Develop's current shape would conflict on nearly every file.
+2. **Run the bench tests against the pre-port head FIRST.** Several phases may already be merged via other PRs.
+3. **For the pause logic specifically, run all of C1/C2/C3.** C2 is the only test that exposes the callback-ordering bug.
+4. **The Develop `PowerBoardStatusCb` already has voltage-fault zero-power routing** that doesn't exist on Prescan. Don't remove it during the port; layer pause on top.
+5. **Develop has Token / Tamper / Pay states adjacent to USER_COOKING.** Verify ENERGY_INFO_BUTTON stays inert in those (default for missing state-table entries is NO_ACTION, so as long as nothing is added there, it's safe).
+
+- **Status:** Verified (all 14 bench tests pass on bench hardware). PR not yet opened.

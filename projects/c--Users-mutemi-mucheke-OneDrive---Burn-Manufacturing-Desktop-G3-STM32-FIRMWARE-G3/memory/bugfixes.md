@@ -433,3 +433,33 @@
 - **Verification:** Stage B-8 binary (minimal main with `BleUartInit()` called after `W25qxx_Init()`): 10 cold reboots, all 10 printed both `[FixCheck] BleUartInit returned -- ORE fix works for USART2.` and `[FixCheck] PASS -- reached idle loop without hanging.` Then `STAGE_A_FLASH_ONLY=0` (full firmware): operator confirmed cold reboots no longer truncate at `[Flash] C` and the firmware reaches the LOCK/UNLOCK step end-to-end on every boot.
 - **Reproduction recipe for future Claude instances:** if firmware that worked on R-N starts truncating UART output on R-(N+1), check whether any peripheral whose RX line was actively driven on R-N is now floating on R-(N+1) (look for power-rail / load-switch / LDO polarity differences). When an RX line floats and the matching peripheral is enabled (UART running) but its RXNEIE is OFF, ORE can latch silently before the IRQ is enabled. The instant something later enables RXNEIE, the IRQ storms. Always clear `ICR` error bits + drain `RDR` immediately before flipping RXNEIE on, and defensively clear `ICR` errors in the IRQ handler too.
 - **Status:** Verified
+
+## Phase C pot-lift pause naive port terminated the session on first lift (Develop-specific addendum)
+- **Product:** G3 (Develop branch family — does NOT apply to Prescan/CHK-Bring-Up where the original 2026-04-24 pause fix landed cleanly)
+- **Date:** 2026-06-09
+- **Branch:** Usage-Feature (off Develop)
+- **Files changed:** `ExternalPeripherals/InductionCooker/Src/IndCooker.c` (the `ErrorBlocking` boolean computation inside `PowerBoardStatusCb`)
+- **Root cause / Purpose:** The Phase C port of the pause-vs-end behaviour (originally commit `083b57d` on Prescan / `43e0bbf` on CHK-Bring-Up) was first implemented as a faithful reproduction of the spec's recommended structure:
+  ```c
+  bool ErrorBlocking = CookerErrorExceptVoltageIssue();
+  if (ErrorBlocking || !CookerOn) { CookerState_Off(); ... }
+  else if (!PotPresent) { SessionPaused = true; }
+  else { ... CookerState_On(...); }
+  ```
+  C1 (single lift/replace) and C3 (single lift + 30 s auto-shutdown) passed. C2 (lift/replace/lift/OFF — must show the full cook total) **FAILED** — the shutdown screen still showed only the last segment's kWh, exactly the pre-fix symptom.
+
+  The failure traces to two Develop-specific facts that the Prescan-derived spec doesn't capture:
+  1. **Driver callback ordering.** Both `HighwayDriver` (line 392-397) and `CHKDriver` (line 210-217) invoke `ErrorCallback` **before** `StatusCallback` within the same dispatch tick. By the time `PowerBoardStatusCb` runs, `PowerBoardErrorCb` has already executed and set `CurrentErrorCode = COOKER_ERROR_NO_POT_ERROR` (line 128 in `IndCooker.c`).
+  2. **`CookerErrorExceptVoltageIssue` enum range.** On Develop the helper checks `(CurrentErrorCode >= COOKER_ERROR_SURFACE_TEMP_SENSOR_OPEN_CIRCUIT) && (<= COOKER_ERROR_MAIN_BOARD_COMMUNICATION_ERROR)` — a range of 3..13 in enum value space. `COOKER_ERROR_NO_POT_ERROR` is value 10, **inside** that range. So on every status frame after a pot-lift, `ErrorBlocking` evaluates to `true`, the first branch fires, and `CookerState_Off` ends the session — defeating the pause.
+
+  C1 passed because there's only one cook segment to "lose" — the session ends on lift, `LatestSessionData.CookerPower` reflects that one segment, replace starts a fresh session, OFF flushes the fresh one. C3 passed for the same reason — only one segment exists when auto-shutdown fires. C2 exposes the bug because multiple segments exist by the time the user presses OFF, and `LatestSessionData.CookerPower` carries only the last one.
+- **What we tried that didn't work:** the direct port of the spec's pseudocode. C2 caught the gap; C1+C3 alone are not sufficient coverage. Avoid trusting a partial pass.
+- **Final solution:** special-case `NO_POT_ERROR` at the call site in `PowerBoardStatusCb`:
+  ```c
+  bool ErrorBlocking = CookerErrorExceptVoltageIssue() &&
+                       (CurrentErrorCode != COOKER_ERROR_NO_POT_ERROR);
+  ```
+  The helper retains its general semantics elsewhere (it's `static` and used only in this branch). The pause branch now correctly fires on pot-absent + cooker-on + no other blocking error.
+- **Verification:** Re-ran C1/C2/C3 — all PASS. The lift/replace/lift/OFF sequence now shows the full cook total on the shutdown screen, matching the original Prescan behaviour.
+- **Reproduction recipe for future Claude instances:** any port of a pause-vs-end pattern between branches needs to verify the "blocking error" helper does not include the specific error code being paused on. The exact range check varies by branch; always read it from the target branch's source rather than assuming continuity. Same caution applies to the G4 codebase (same CHK driver, same error enum) if the pause logic is ever ported there. **Run all three bench tests, not just the easy ones** — a 2/3 partial pass on this pattern is the bug signature.
+- **Status:** Verified (Phase C of the Usage Feature port, single commit `005ae3e` post-rebase)
