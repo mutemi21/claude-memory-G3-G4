@@ -463,3 +463,43 @@
 - **Verification:** Re-ran C1/C2/C3 — all PASS. The lift/replace/lift/OFF sequence now shows the full cook total on the shutdown screen, matching the original Prescan behaviour.
 - **Reproduction recipe for future Claude instances:** any port of a pause-vs-end pattern between branches needs to verify the "blocking error" helper does not include the specific error code being paused on. The exact range check varies by branch; always read it from the target branch's source rather than assuming continuity. Same caution applies to the G4 codebase (same CHK driver, same error enum) if the pause logic is ever ported there. **Run all three bench tests, not just the easy ones** — a 2/3 partial pass on this pattern is the bug signature.
 - **Status:** Verified (Phase C of the Usage Feature port, single commit `005ae3e` post-rebase)
+
+## Pot-lift pause didn't freeze the accumulator — stop-during-pause overcounted kWh
+- **Product:** G3 (Develop branch family — also relevant for G4 if/when the pause logic is ported there since `CookingSession.c` is shared)
+- **Date:** 2026-06-10
+- **Branch:** Usage-Feature (commit `247bb08`, Copilot PR review fix)
+- **Files changed:** `ExternalPeripherals/InductionCooker/Inc/CookingSession.h`, `Src/CookingSession.c`, `Src/IndCooker.c`
+- **Symptom:** With the Phase C pause-vs-end logic in place, the C1/C2/C3 bench tests passed (multi-lift sessions credited the full cook total on OFF). But a fourth case — lift the pot then press OFF *while the pot is still lifted* — overcounted kWh by roughly `ActualPower × pause_seconds`. Was never caught in bench because the original C-tests always ended with either a pot-replaced final segment or the 30 s E0 auto-shutdown.
+- **Root cause / Purpose:** the Phase C pause branch in `PowerBoardStatusCb` set a `SessionPaused = true` flag and returned without touching `CurrentSession.End` or `CurrentSession.ActualPower`. On a subsequent stop while still paused, `CookingSession_Stop → CookingSession_Update → UpdateSessionPower` computed `timeDiff = (now − End_before_pause)` — a potentially long interval — and multiplied by the pre-lift `ActualPower` (1500 W typical). Result: `AccumulatedPower += 1500 × pause_seconds`, all of it phantom cooking energy. The bug only manifested when stop happened during a pause; resume realignment via `CookingSession_ResumeFromPause` covered the pot-returned-then-stop case.
+- **What we tried that didn't work:** the initial Phase C implementation. C1/C2/C3 bench passed end-to-end against actual hardware, hiding the bug. Caught only by Copilot AI code review reading the diff against integrator semantics.
+- **Final solution:** new public function `CookingSession_PauseAccumulation(const TIME_T*)` in `CookingSession.{h,c}`. At pause entry it:
+  1. Calls `UpdateSessionPower(now)` to flush any pre-pause energy with the live wattage (so the time up to the lift is correctly attributed).
+  2. Explicitly sets `CurrentSession.End = *CurrentTime` (because `UpdateSessionPower`'s `timeDiff < 1` guard would otherwise leave End unchanged on a sub-second-old session).
+  3. Zeros `CurrentSession.ActualPower` and `CurrentSession.CurrentUserPowerSetting` so any subsequent `UpdateSessionPower` call during the pause contributes `0 × timeDiff = 0`. Covers both `USE_POWER_BOARD_MEASURED_POWER = 0` and `= 1`.
+  
+  Guarded with `if (!CurrentSession.isActive) return;` so it can't start a session by accident. Called from `PowerBoardStatusCb`'s pause branch gated on `!SessionPaused` so it fires only on the *first* frame of a new pause; subsequent pot-absent frames keep `SessionPaused = true` without re-flushing.
+- **Verification:** new bench test C4 — cook 1+ min, lift pot, press OFF *before* replacing pot. Shutdown ``USED → kWh`` screen shows kWh up to the lift moment only, no overcount. C1/C2/C3 also re-passed (no regression).
+- **Reproduction recipe for future Claude instances:** any pause-vs-end pattern over a `Δt × power` integrator must FREEZE the integrator at pause entry, not just skip frames. Either (a) call `Update(now)` then zero the wattage (option taken here), or (b) snapshot End at pause entry and apply an explicit `(End_pause_end − End_pause_start)` correction on resume. Bench coverage must include "stop during the pause" as a distinct case — the typical pause/resume/stop sequence won't expose it because `ResumeFromPause` already covers the resume realignment. **Always test the off-during-pause sequence as a separate case.**
+- **Status:** Verified (C1–C4 all pass on bench hardware post-fix)
+
+## RealtimeTimerEditPending stuck after non-LOCK exit from INFO_REALTIME_TIMED
+- **Product:** G3 (Develop branch family)
+- **Date:** 2026-06-10
+- **Branch:** Usage-Feature (commit `247bb08`, Copilot PR review fix)
+- **Files changed:** `ProductFeatures/UI/Src/UIPresenter.c` (the `UIPresenter_Tick` realtime-edit cleanup branch)
+- **Symptom (predicted, never bench-observed):** if a user pressed TIMR+/- on `INFO_REALTIME_TIMED` to stage a new timer value (setting `RealtimeTimerEditPending = true`, `RealtimeTimerEditCounter = 3`), then exited the state via PWR+/-, ON/OFF, or INFO short-press BEFORE the 3 s commit window elapsed, `RealtimeTimerEditPending` would stay sticky. Two downstream effects:
+  1. `IsTimerActiveState()` returns `!RealtimeTimerEditPending` for the timed-realtime variants. With a sticky `true`, it would return `false` on a later return to `INFO_REALTIME_TIMED`, suppressing legitimate `HandleTimerExpiry` until the next TIMR press cleared the stale flag.
+  2. On a later return to `INFO_REALTIME_TIMED`, the tick handler would resume counting the leftover counter and auto-commit a stale `UIModel` value once it hit zero.
+- **Root cause / Purpose:** the original tick handler used:
+  ```c
+  if (RealtimeTimerEditPending && (state == TIMED || state == TIMED_LOCKED)) {
+      // decrement / commit
+  } else if (!RealtimeTimerEditPending) {
+      RealtimeTimerEditCounter = 0;
+  }
+  ```
+  When `Pending && state-not-TIMED` (the failure window) neither branch fired, so the flag and counter persisted. The only exit path that cleared the flag explicitly was `RealtimeEngageLock` (which clears it on lock engagement). PWR+/-, ON/OFF, and INFO short all exit via different helpers that didn't.
+- **Final solution:** change the `else if (!RealtimeTimerEditPending)` to a plain `else`. Now any time we're not in the timed-realtime variants, both the flag and the counter are cleared. The clear is a no-op in the common case (when Pending was already false), but catches the bug case.
+- **Verification:** code-path analysis only. Bench-test C1–C4, D1–D8 passed, no regression in any timer-related flow. The bug requires a narrow timing window (TIMR press + exit-via-non-LOCK within 3 s) that hadn't been part of the bench plan, so this stayed undetected until Copilot review caught the dead-code structure.
+- **Reproduction recipe for future Claude instances:** any pending-flag + idle-counter pattern in a state machine must guarantee that ALL exit paths from the relevant state clear both the flag and the counter, OR (cleaner) have the tick handler enforce the invariant by clearing whenever it sees we're not in the gating state. The `else if (!flag)` pattern is a trap — it only catches the steady-state, not the transient-while-set-and-exiting case. Same caution applies to any future "edit pending + tick-commit" patterns elsewhere in the UI.
+- **Status:** Verified (code-path analysis; bench tests show no regression — direct trigger is too narrow to add a dedicated bench test for)

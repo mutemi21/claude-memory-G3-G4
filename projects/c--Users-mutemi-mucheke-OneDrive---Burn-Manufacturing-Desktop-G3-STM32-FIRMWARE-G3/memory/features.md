@@ -504,8 +504,22 @@ All 14 bench tests in `UsageFeaturePort.md` §6 passed: A1–A3, B1–B3, C1–C
 ### Guidance for future ports of this feature
 1. **Cherry-pick is non-viable across diverged branches.** The Develop port took ≈ 1 day of focused work; a cherry-pick attempt against Develop's current shape would conflict on nearly every file.
 2. **Run the bench tests against the pre-port head FIRST.** Several phases may already be merged via other PRs.
-3. **For the pause logic specifically, run all of C1/C2/C3.** C2 is the only test that exposes the callback-ordering bug.
+3. **For the pause logic specifically, run C1–C4** (NOT just C1/C2/C3). C2 exposes the callback-ordering bug; **C4 (lift then OFF before pot returns) exposes the pause-accumulator freeze bug** discovered in Copilot PR review — see "Pot-lift pause didn't freeze the accumulator" in bugfixes.md. The original 3-test bench plan from the spec is incomplete.
 4. **The Develop `PowerBoardStatusCb` already has voltage-fault zero-power routing** that doesn't exist on Prescan. Don't remove it during the port; layer pause on top.
 5. **Develop has Token / Tamper / Pay states adjacent to USER_COOKING.** Verify ENERGY_INFO_BUTTON stays inert in those (default for missing state-table entries is NO_ACTION, so as long as nothing is added there, it's safe).
+6. **The realtime in-place TIMR edit needs a tick-driven `else` (not `else if !Pending`)** to clear the pending flag on non-LOCK exits — see "RealtimeTimerEditPending stuck after non-LOCK exit" in bugfixes.md. Mistake is easy to make; bench coverage won't catch it without a dedicated test.
 
-- **Status:** Verified (all 14 bench tests pass on bench hardware). PR not yet opened.
+### Post-merge review findings (Copilot, 2026-06-10)
+The first commits that shipped the port (`005ae3e`, `726f63a`) bench-passed all A1–A3, B1–B3, C1–C3, D1–D8 but still had two non-obvious bugs that AI code review caught:
+1. **Pause-accumulator freeze bug** — `PowerBoardStatusCb` pause branch didn't freeze `End` / `ActualPower`; stop-during-pause overcounted kWh. Detailed entry in `bugfixes.md`. Fixed in `247bb08` via new `CookingSession_PauseAccumulation`. Added bench test C4.
+2. **Sticky `RealtimeTimerEditPending`** — `UIPresenter_Tick`'s `else if (!Pending)` only cleared the counter when the flag was already false, leaving it sticky if the user exited `INFO_REALTIME_TIMED` mid-edit via PWR+/-, ON/OFF, or INFO. Detailed entry in `bugfixes.md`. Fixed in `247bb08` by changing `else if` to plain `else`.
+
+Both bugs survived a clean A1–D8 bench pass. **Adding code review (human or AI) to the port workflow caught them in roughly one round of review and a single follow-up commit.** Treat this as a data point: bench-test coverage alone is insufficient for integrator/freeze patterns and pending-flag state machinery.
+
+Other (smaller) Copilot findings in the same review round:
+3. `Hundths` typo → renamed to `HundredthsDigit` in both `RenderKwhFloat` and `ShowRealtimeTimedPower`.
+4. `INFO_REALTIME_TIMED_ACCEPTANCE` was missing from the `UIPresenter_HandleError` whitelist — E0 during the 5× flash would have dropped to STANDBY on clear. Added.
+5. `USE_POWER_BOARD_MEASURED_POWER` inline rationale expanded so the macro choice is discoverable from the source, not just PR comments.
+6. `SessionAggr_Tick` docstring updated to point at `main.c`'s tick block (the actual call site) rather than the original `UIPresenter_Tick` draft.
+
+- **Status:** Verified (all 15 bench tests pass on bench hardware post-`247bb08`: A1–A3, B1–B3, C1–C4, D1–D8). PR #34 open against `Develop`, ready for merge from the implementer's side.
