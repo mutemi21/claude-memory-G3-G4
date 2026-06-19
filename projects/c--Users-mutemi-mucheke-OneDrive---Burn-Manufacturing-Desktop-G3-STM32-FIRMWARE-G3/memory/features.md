@@ -523,3 +523,90 @@ Other (smaller) Copilot findings in the same review round:
 6. `SessionAggr_Tick` docstring updated to point at `main.c`'s tick block (the actual call site) rather than the original `UIPresenter_Tick` draft.
 
 - **Status:** Verified (all 15 bench tests pass on bench hardware post-`247bb08`: A1–A3, B1–B3, C1–C4, D1–D8). PR #34 open against `Develop`, ready for merge from the implementer's side.
+
+## Silent Thermal Regulator (PL1-throttle + ADC-indexed Highway lookup)
+- **Product:** G3
+- **Date:** 2026-06-19
+- **Branch:** Feature/Temperature-Control
+- **Commit:** c67c50a
+- **Files changed:**
+  - `ExternalPeripherals/ThermalRegulator/Inc/ThermalRegulator.h` (new)
+  - `ExternalPeripherals/ThermalRegulator/Src/ThermalRegulator.c` (new)
+  - `ExternalPeripherals/PowerBoard/Inc/HighwayTempLookUp.h` (rewrite: ADC-indexed)
+  - `ExternalPeripherals/PowerBoard/Src/HighwayDriver.c` (regulator wiring, lookup simplify, debug)
+  - `ExternalPeripherals/PowerBoard/Src/CHKDriver.c` (regulator wiring)
+  - `ExternalPeripherals/PowerBoard/Src/PowerBoard.c` (single `POWER_BOARD_TYPE` define)
+  - `CMakeLists.txt` (sources + include path)
+  - `.cproject` (include path)
+
+### Purpose
+Eliminate user-visible E3 (`COOKER_ERROR_SURFACE_TEMP_SENSOR_OVER_TEMPERATURE`) trips during normal cooking. Pre-feature, users hitting the power board's onboard 188 °C trip would see E3 and try to clear it by toggling ON/OFF — a UX wart. The new regulator silently soft-throttles the wire-level command so E3 only ever surfaces as a real hazard signal (regulator wasn't enough) rather than as routine.
+
+### Design
+
+**Shared driver-agnostic module.** `ThermalRegulator.c/.h` lives under `ExternalPeripherals/ThermalRegulator/`. Both `HighwayDriver` and `CHKDriver` feed it via `ThermalRegulator_Update(potT, igbtT, sensorError)` once per RX status frame, and resolve their TX wire-level command via `ThermalRegulator_ApplyToLevel(CurrentPowerLevel)`. The regulator never mutates `CurrentPowerLevel`, so the UI shows the user's selected level throughout — it is a *silent* throttle.
+
+**Pot/surface NTC: 3-state machine.**
+
+```
+First overshoot per power-up:
+  NORMAL --175C--> HARD_CUT --165C--> NORMAL  (direct, 10 C hysteresis)
+
+Subsequent overshoots:
+  NORMAL --175C--> THROTTLED (PL1 200 W) --165C--> NORMAL
+
+PL1 escape safety floor (rare in steady state):
+  THROTTLED --185C--> HARD_CUT --175C--> THROTTLED --165C--> NORMAL
+```
+
+Why the asymmetry: the first overshoot per power-up is when the cooker has the most pent-up thermal energy and PL1 alone may not be enough (verified in Run 3 where PL1 escaped to HARD_CUT). Going straight to HARD_CUT on the first overshoot opens a **13 °C margin** from E3 (175 vs 188), instead of the tight 3 °C margin a `THROTTLED -> HARD_CUT` escalation would leave. After the first overshoot has been fully cleared, the thermal mass has settled and PL1 alone holds the pot in the 165–175 °C band reliably (verified in Run 6).
+
+**HARD_CUT exit threshold is origin-aware.** The fix that came out of Run 5: HARD_CUT entered from NORMAL (first overshoot, at 175) exits at 165 directly to NORMAL. HARD_CUT entered from THROTTLED (PL1 escape, at 185) exits at 175 back to THROTTLED, then to NORMAL at 165. Each entry has its own 10 °C hysteresis. Tracked by `HardCutFromThrottled` bool. Without this, Run 5 showed a degenerate one-frame HARD_CUT (entry at 175, exit at 175 same frame).
+
+**IGBT NTC: simple bang-bang**, 70/65 thresholds, always hard cut. Sensor open/short/failure forces the matching latch ON as defence-in-depth. No PL1 path on the IGBT side — IGBT only ever does hard cut.
+
+**Compile-time toggles in `ThermalRegulator.c`:**
+- `THERMAL_REGULATOR_ENABLED` (default 1): set to 0 to bypass `ApplyToLevel` output while keeping the state machine and its debug prints active. Used to characterise the power board's onboard E3 trip without firmware interference.
+- `POT_THROTTLE_MODE_PL1` (default 1): set to 0 to revert pot side to a simple 2-state bang-bang (HARD_CUT at 175, NORMAL at 165) — the original baseline.
+
+### Highway ADC-indexed lookup port (the upstream fix that unblocked everything)
+
+Pre-feature, `HighwayTempLookUp.h` was indexed by *computed* NTC resistance from the formula `R = 5.1 * 255 / ADC - 5.1` (POT) or `R = 10 * 255 / ADC - 10` (IGBT), then cast to `uint16_t` to index a 326-entry table. Integer truncation collapsed many ADC values into table index 0 or 1:
+
+| ADC | Computed R (kΩ) | Index (int cast) | G3 reads as |
+|---|---|---|---|
+| 192–213 | 1.0–1.7 | 1 | 165 °C |
+| 214–254 | <1.0 | 0 | 255 °C (sentinel) |
+
+At real cooktop temperatures of 168–175 °C (ADC ~210–215), the firmware oscillated between 165 °C and 255 °C frame-to-frame with single-LSB ADC noise. Run 1 showed the regulator firing 10+ cuts/resumes per second on this bogus data.
+
+Ported G4's ADC-indexed `PotTempFromADC[256]` and `IgbtTempFromADC[256]` tables from `STM32_FIRMWARE_G4` Temp-Control branch. Direct indexing, no float math, no integer-truncation collapse, 1 °C resolution across the whole ADC range. ADC=0 and ADC=246–255 map to the 255 sentinel (invalid). The conversion functions in `HighwayDriver.c` collapsed to single-line table lookups. Validation in Run 2 immediately showed real temperatures (e.g. ADC=215 → 175 °C exactly), and Run 4 verified the lookup is calibrated to the Highway board: with regulator disabled, E3 fired at ADC=224 → 188 °C — matches the power board's onboard trip point with `DEFAULT_FURNACE_HIGH_TEMP_PROTECTION_SETTING=0xE0`.
+
+### PowerBoard.c consolidation
+The driver selection (`PowerBoardType = COOKER_POWER_BOARD_HIGHWAY`) was hardcoded in two separate places (`PowerBoard_Init` and `PowerBoard_SetBaudRate`). Replaced both with a single `#define POWER_BOARD_TYPE COOKER_POWER_BOARD_HIGHWAY`. Changing board now means editing one line, not remembering two.
+
+### Debug instrumentation
+- `THERMAL_REGULATOR_DEBUG_ENABLED 1` in `ThermalRegulator.c`: edge-only control-action prints. Examples:
+  - `ThermalRegulator: pot HARD CUT (initial overshoot, wire=OFF+FAN) [NORMAL -> HARD_CUT] (temp=175C, fault=0)`
+  - `ThermalRegulator: pot SOFT CUT (wire=PL1 200W) [NORMAL -> THROTTLED] (temp=175C, fault=0)`
+  - `ThermalRegulator: pot RESUME (from hard cut direct, wire=user level) [HARD_CUT -> NORMAL] (temp=165C, fault=0)`
+  - `ThermalRegulator: pot RELAX (hard cut -> soft cut, wire=PL1 200W) [HARD_CUT -> THROTTLED] (temp=175C, fault=0)`
+  - `ThermalRegulator: IGBT HARD CUT (wire=OFF+FAN) (temp=70C, fault=0)`
+- `HIGHWAY_TEMP_DEBUG_ENABLED 1` in `HighwayDriver.c` (separate from `HIGHWAY_DRIVER_DEBUG_ENABLED`): per-frame diagnostic throttled to 1 in every 50 RX frames (~1 Hz), e.g. `Highway frame: err=0 potADC=214 potT=173C igbtADC=42 igbtT=41C sysFlag=0x88 user=11 eff=11`. `user=N eff=M` shows user-requested vs regulator-resolved wire level; `user != eff` flags an active throttle/cut.
+- Highway error transitions logged with `*** E3 FIRED ***` markers for trip-point characterisation work.
+
+### Verification (bench runs)
+- **Run 1:** Original (resistance-indexed) lookup table — exposed integer-truncation collapse. Pot temps stuck at 165/255 alternation.
+- **Run 2:** Post-lookup-port, pre-regulator. Pot reads accurate temperatures (175 °C at ADC=215 etc.). NTC oscillation gone.
+- **Run 3:** Regulator on (3-state PL1 mode, original symmetric hysteresis) — confirmed PL1 escape to HARD_CUT on first overshoot, then steady-state ~50 % duty cycle between NORMAL and THROTTLED.
+- **Run 4:** Regulator output bypassed (`THERMAL_REGULATOR_ENABLED 0`) — E3 fired at exactly ADC=224 / pot=188 °C. Confirms lookup table calibration and gives the 13/3 °C margin numbers used in the asymmetric design.
+- **Run 5:** First-overshoot HARD_CUT logic enabled but exposed a one-frame HARD_CUT bug (entry 175, exit 175, no hysteresis). Fixed with origin-aware exit threshold.
+- **Run 6:** Final form. Initial HARD_CUT at 175 holds for ~30 s until 165, then transitions to NORMAL directly. All subsequent overshoots are SOFT_CUT → THROTTLED → 165 → NORMAL with proper 10 °C hysteresis. **Zero HARD_CUT escapes after the first overshoot. Zero E3 trips. Clean control behaviour.**
+
+### Boot-with-hot-pot caveat (known, accepted)
+If the pot is residually hot from a previous session and ≥ 175 °C on the first status frame after boot, the regulator will trigger its "first overshoot" HARD_CUT immediately and hold it until the pot cools to 165 °C. The cooker will not heat during that window even if the user turns on. Defensible as a conservative safety behaviour, but worth noting. Could be refined later by adding a "warm-up below threshold seen" gate before counting an overshoot as "first".
+
+### IGBT calibration caveat (open question)
+IGBT temperature reads consistently low across all runs (range 28–42 °C during active cooking on Run 2/3). Three possibilities: (a) the IGBT is genuinely well-cooled and 30–50 °C is correct, (b) the G4-ported IGBT lookup uses a different NTC β than the actual G3 IGBT NTC part, or (c) `Data[2]` is not quite the IGBT ADC byte we think it is. Not blocking — regulator's 70 °C IGBT threshold is far above observed values. Worth physical heatsink touch-check next time the cooker is on bench.
+
+- **Status:** Verified (Run 6 bench test on Highway with real pot — clean first-overshoot HARD_CUT, all subsequent overshoots handled by PL1 SOFT_CUT, zero E3 trips, all transitions have proper 10 °C hysteresis).
