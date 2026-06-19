@@ -610,3 +610,6 @@ If the pot is residually hot from a previous session and ≥ 175 °C on the firs
 IGBT temperature reads consistently low across all runs (range 28–42 °C during active cooking on Run 2/3). Three possibilities: (a) the IGBT is genuinely well-cooled and 30–50 °C is correct, (b) the G4-ported IGBT lookup uses a different NTC β than the actual G3 IGBT NTC part, or (c) `Data[2]` is not quite the IGBT ADC byte we think it is. Not blocking — regulator's 70 °C IGBT threshold is far above observed values. Worth physical heatsink touch-check next time the cooker is on bench.
 
 - **Status:** Verified (Run 6 bench test on Highway with real pot — clean first-overshoot HARD_CUT, all subsequent overshoots handled by PL1 SOFT_CUT, zero E3 trips, all transitions have proper 10 °C hysteresis).
+
+### Post-feature sanity-check fix (commit `9042c28`)
+Code-review pass after Run 6 caught a regression where `ApplyToLevel`'s THROTTLED branch returned `COOKER_POWER_200W` unconditionally, including when the user had commanded OFF / 0 W / NO_POWER_FAN_ON. Pressing OFF mid-throttle would have continued heating the pot at PL1 until the temp dropped below 165 °C. Fixed by guarding the THROTTLED substitution against no-heat user requests — see "ThermalRegulator throttled OFF still heats at PL1" in bugfixes.md. Bench test E1 to confirm pending next cooker session.

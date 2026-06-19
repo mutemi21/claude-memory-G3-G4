@@ -508,3 +508,32 @@
 - **Verification:** code-path analysis only. Bench-test C1–C4, D1–D8 passed, no regression in any timer-related flow. The bug requires a narrow timing window (TIMR press + exit-via-non-LOCK within 3 s) that hadn't been part of the bench plan, so this stayed undetected until Copilot review caught the dead-code structure.
 - **Reproduction recipe for future Claude instances:** any pending-flag + idle-counter pattern in a state machine must guarantee that ALL exit paths from the relevant state clear both the flag and the counter, OR (cleaner) have the tick handler enforce the invariant by clearing whenever it sees we're not in the gating state. The `else if (!flag)` pattern is a trap — it only catches the steady-state, not the transient-while-set-and-exiting case. Same caution applies to any future "edit pending + tick-commit" patterns elsewhere in the UI.
 - **Status:** Verified (code-path analysis; bench tests show no regression — direct trigger is too narrow to add a dedicated bench test for)
+
+## ThermalRegulator throttled OFF still heats at PL1
+- **Product:** G3
+- **Date:** 2026-06-19
+- **Branch:** Feature/Temperature-Control (commit `9042c28`, sanity-check fix on top of feature commit `c67c50a`)
+- **Files changed:** `ExternalPeripherals/ThermalRegulator/Src/ThermalRegulator.c` (the `ThermalRegulator_ApplyToLevel` function)
+- **Symptom (predicted, never bench-observed):** if a user pressed OFF while the regulator was in `POT_THROTTLED` (which happens during normal cooking once the surface NTC crosses 175 C on subsequent overshoots), the cooker would continue to heat at PL1 (200 W) for as long as the pot temp stayed above 165 C — potentially many seconds — despite the user having explicitly commanded off. Same defect applied if the user was in the 0 W standby cook state or the NO_POWER_FAN_ON cool-down state: the regulator would substitute 200 W and actively reheat. The HARD_CUT path was safe (always returns NO_POWER_FAN_ON which is fan-only / no-heat), only THROTTLED was affected.
+- **Root cause / Purpose:** `ThermalRegulator_ApplyToLevel` unconditionally returned `COOKER_POWER_200W` whenever `PotState == POT_THROTTLED`, regardless of the user's requested level:
+  ```c
+  if (PotState == POT_THROTTLED) {
+      return COOKER_POWER_200W;
+  }
+  ```
+  The original design discussion ("focus the algorithm on temperature being the trigger") was about scoping the *trigger*, not the *output*. But the substitution loop didn't carry that intent forward — once in THROTTLED, the output became deterministic at 200 W regardless of whether the user wanted heat at all. This is the dual of an "interlock" pattern: a regulator that can *increase* power is not a regulator, it's a heater.
+- **Final solution:** in `ApplyToLevel`'s THROTTLED branch, return `Requested` unchanged when the user has commanded no heat (`COOKER_POWER_NO_POWER`, `COOKER_POWER_0W`, or `COOKER_POWER_NO_POWER_FAN_ON`):
+  ```c
+  if (PotState == POT_THROTTLED) {
+      if (Requested == COOKER_POWER_NO_POWER ||
+          Requested == COOKER_POWER_0W ||
+          Requested == COOKER_POWER_NO_POWER_FAN_ON) {
+          return Requested;
+      }
+      return COOKER_POWER_200W;
+  }
+  ```
+  The throttle now only substitutes 200 W for *active* user requests at or above 200 W. The HARD_CUT path is unchanged (always returns NO_POWER_FAN_ON which is safe under any user command).
+- **Verification:** code-path analysis only at the time of fix. Bench test E1 (start cook, hit 175 C, then press OFF mid-throttle, watch wire-level `eff=` field in the Highway frame log) would confirm: pre-fix shows `user=0 eff=2` for several seconds, post-fix shows `user=0 eff=0` immediately.
+- **Reproduction recipe for future Claude instances:** any regulator/limiter pattern that substitutes the output must include a "never push UP" guard for the case where the user has already commanded a lower power. The trap is treating the regulator state as authoritative without considering that the user might want LESS heat than the limiter's set-point. Anti-pattern: `return <fixed level>` without consulting the requested level. Pattern: `return min(Requested, <fixed level>)` (in spirit; the CookerPower_e enum's NO_POWER_FAN_ON at index 12 means literal min() doesn't work, so explicit no-heat checks are required).
+- **Status:** Verified by code-path analysis. Bench test E1 still to be run when the cooker is next on the bench.
