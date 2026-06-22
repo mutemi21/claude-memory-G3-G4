@@ -46,3 +46,5 @@ See `ui_architecture.md` for full UI details.
 See `features.md` for implemented features.
 See `bugfixes.md` for bug fixes.
 - [CHK Driver Protocol](chk_driver_protocol.md) — UART protocol, wake-up sequence, commanded vs reported state
+- [TIM14 Sole UART Writer port guide](Tim14SoleUartWriterPortGuide.md) — replicate Highway TIM14-only-writer race fix on a divergent branch
+- [Thermal Control port guide](ThermalControlPortGuide.md) — replicate silent thermal regulator + ADC-indexed lookup on a divergent branch
